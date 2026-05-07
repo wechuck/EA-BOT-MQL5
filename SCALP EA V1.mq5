@@ -5,6 +5,24 @@
 //|   (Multi-Pair Auto-Config + Regime-Gated Engine Routing)        |
 //+------------------------------------------------------------------+
 //
+// V21.0 ADDS (layered on top of V20.0 — ALL V20 logic intact):
+//
+//   MR DIRECTIONAL GUARD (V21):
+//     Prevents mean-reversion entries when DI directional imbalance is too large.
+//     A BUY reversal is hard-blocked when DI- exceeds DI+ by InpV21MaxDISpreadMR
+//     (price in sustained downward expansion — reversal accuracy collapses).
+//     A SELL reversal is hard-blocked when DI+ exceeds DI- by the same margin.
+//     Guard applies in both RANGE and TRANSITION regimes; TREND is already blocked.
+//     When InpV20UseRegimeFilter is false, V21 guards are also inactive (V19 clone).
+//
+//   RE-ENTRY DIRECTIONAL GUARD (V21):
+//     Re-entry (MR second-chance after SL) is now blocked in TREND regime —
+//     repeating a mean-reversion trade into a confirmed trend is the primary cause
+//     of back-to-back losses that overwhelm accumulated winners.
+//     Additionally, DI imbalance is checked before re-entry fires: if the opposing
+//     DI spread exceeds InpV21ReentryMaxDI, the re-entry is suppressed (tighter
+//     threshold than the primary MR guard — re-entries carry extra structural risk).
+//
 // V20.0 ADDS (layered on top of V19.0 — ALL V19 logic intact):
 //
 //   REGIME ENGINE (ClassifyRegimeV20):
@@ -53,7 +71,7 @@
 
 #property copyright "Copyright 2026, Trading Pro"
 #property link      "https://www.mql5.com"
-#property version   "20.00"
+#property version   "21.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -182,6 +200,10 @@ input int    InpV20SlowEMAPeriod   = 50;    // Slow EMA period (M5 timeframe)
 input group "=== V20: ENGINE HEALTH ==="
 input int    InpV20ShutLosses      = 3;     // Consecutive losses to temporarily shut down an engine
 input int    InpV20RecoveryBars    = 50;    // New bars before a shutdown engine is re-enabled
+
+input group "=== V21: MR DIRECTIONAL GUARD ==="
+input double InpV21MaxDISpreadMR   = 15.0;  // Block MR reversal when opposing DI spread exceeds this
+input double InpV21ReentryMaxDI    = 12.0;  // Max opposing DI spread allowed for re-entry (tighter)
 
 //--- GLOBALS (V19 — unchanged)
 CTrade trade;
@@ -367,7 +389,7 @@ int OnInit()
    g_V20LastDealScan      = 0;
    g_V20ActiveEngine      = 0;
 
-   PrintFormat("SCALP GOLDEA V20.0 initialized. Symbol=%s TF=%s HTF=%s RegimeFilter=%s",
+   PrintFormat("SCALP GOLDEA V21.0 initialized. Symbol=%s TF=%s HTF=%s RegimeFilter=%s",
                _Symbol, EnumToString(_Period), EnumToString(InpHTF),
                InpV20UseRegimeFilter ? "ON" : "OFF");
    return INIT_SUCCEEDED;
@@ -542,6 +564,11 @@ void OnTick()
          if(InpV20UseRegimeFilter && g_V20Regime == REGIME_V20_TRANSITION)
             scoreRisk = InpRiskLevel1;
 
+         // V21: Hard-block MR BUY when DI- strongly dominates (directional expansion downward).
+         // Price is in sustained bearish expansion — reversal accuracy is statistically insufficient.
+         if(InpV20UseRegimeFilter && (minus - plus) > InpV21MaxDISpreadMR)
+            return;
+
          if(scoreRisk >= InpRiskLevel2 && !IsL23SniperAllowed(ORDER_TYPE_BUY, scoreRisk))
             scoreRisk = InpRiskLevel1;
 
@@ -584,6 +611,11 @@ void OnTick()
          // V20 TRANSITION safety: demote MR to L1 only
          if(InpV20UseRegimeFilter && g_V20Regime == REGIME_V20_TRANSITION)
             scoreRisk = InpRiskLevel1;
+
+         // V21: Hard-block MR SELL when DI+ strongly dominates (directional expansion upward).
+         // Price is in sustained bullish expansion — reversal accuracy is statistically insufficient.
+         if(InpV20UseRegimeFilter && (plus - minus) > InpV21MaxDISpreadMR)
+            return;
 
          if(scoreRisk >= InpRiskLevel2 && !IsL23SniperAllowed(ORDER_TYPE_SELL, scoreRisk))
             scoreRisk = InpRiskLevel1;
@@ -1262,6 +1294,17 @@ bool TryReentry(double Ask, double Bid)
    bool   adxRising = (adx > adxMain[2]);
    if(adx < 20.0 || !adxRising) return false;
 
+   // V21: Re-entry is a mean-reversion second-chance; it must not fire into a confirmed trend.
+   if(InpV20UseRegimeFilter && g_V20Regime == REGIME_V20_TREND) return false;
+
+   // V21: Read DI directional imbalance — re-entry into a strong directional move
+   // is the primary source of back-to-back losses that overpower accumulated winners.
+   double reDIPlus[], reDIMinus[];
+   ArraySetAsSeries(reDIPlus, true); ArraySetAsSeries(reDIMinus, true);
+   if(CopyBuffer(handleADX, 1, 0, 2, reDIPlus)  < 2) return false;
+   if(CopyBuffer(handleADX, 2, 0, 2, reDIMinus) < 2) return false;
+   double rePlus = reDIPlus[1], reMinus = reDIMinus[1];
+
    ENUM_ORDER_TYPE retryType = (g_ReentryDir == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(!IsSignalAlignedWithTick(retryType)) return false;
 
@@ -1279,6 +1322,8 @@ bool TryReentry(double Ask, double Bid)
    if(g_ReentryDir == 1 &&
       low1 <= bbLower[1] && rsiArr[1] < g_RSIOversold && bullishCandle && strongBuyReversal)
    {
+      // V21: Block re-entry BUY if DI- is still strongly dominant
+      if(InpV20UseRegimeFilter && (reMinus - rePlus) > InpV21ReentryMaxDI) return false;
       if(IsLargeCandle()) return false;
       if(!IsEntryLocationOK(ORDER_TYPE_BUY, Ask)) return false;
       if(InpUseVolFilter && !IsVolatilitySafe(ORDER_TYPE_BUY)) return false;
@@ -1289,6 +1334,8 @@ bool TryReentry(double Ask, double Bid)
    if(g_ReentryDir == -1 &&
       high1 >= bbUpper[1] && rsiArr[1] > g_RSIOverbought && bearishCandle && strongSellReversal)
    {
+      // V21: Block re-entry SELL if DI+ is still strongly dominant
+      if(InpV20UseRegimeFilter && (rePlus - reMinus) > InpV21ReentryMaxDI) return false;
       if(IsLargeCandle()) return false;
       if(!IsEntryLocationOK(ORDER_TYPE_SELL, Bid)) return false;
       if(InpUseVolFilter && !IsVolatilitySafe(ORDER_TYPE_SELL)) return false;
