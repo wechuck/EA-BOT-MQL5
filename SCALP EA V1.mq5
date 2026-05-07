@@ -7,6 +7,26 @@
 //
 // V21.0 ADDS (layered on top of V20.0 — ALL V20 logic intact):
 //
+//   DAILY PROFIT TARGET — 500 PIP CHALLENGE (V21):
+//     Each trading day has a profit target equal to InpDailyProfitTargetPct % of
+//     the day's opening balance (default 30%, matching the challenge plan table).
+//     Once the day's floating/realised profit crosses that target:
+//       1. All EA positions are closed to lock in the gain.
+//       2. No new entries are placed for the rest of the day.
+//     This directly prevents the equity-givebacks seen in the Strategy Tester graph
+//     where the account grew from $20 → $48 then crashed to $0.9 in one session.
+//     Lot sizes and pip settings are NOT changed — only the daily cut-off is added.
+//
+//   WIN-STREAK EQUITY LOCK (V21):
+//     After InpWinLockMinWins (default 3) consecutive wins the EA sets a hard
+//     balance floor at InpWinLockRetainPct % of the current peak balance (default
+//     70%).  If the balance then drops below that floor, all positions are closed
+//     and new entries are blocked for InpEquityHaltHours (reuses existing V18
+//     setting) to protect accumulated gains before any drawdown gets too deep.
+//     Example: account grows $20 → $48 in 3 wins → floor = 70% × $48 = $33.6.
+//     If balance drops below $33.6 the EA halts — exactly the scenario shown in
+//     the tester graph where $48 → $0.9 was allowed without interruption.
+//
 //   MR DIRECTIONAL GUARD (V21):
 //     Prevents mean-reversion entries when DI directional imbalance is too large.
 //     A BUY reversal is hard-blocked when DI- exceeds DI+ by InpV21MaxDISpreadMR
@@ -209,6 +229,15 @@ input group "=== V21: POSITION SIZING GUARD ==="
 input double InpV21MinMarginLevel  = 300.0; // Minimum margin level (%) allowed after new trade (0=disabled)
 input double InpV21MaxMarginUsePct = 60.0;  // Max % of free margin one trade may consume (replaces old 90%)
 
+input group "=== V21: DAILY PROFIT TARGET (500-PIP CHALLENGE) ==="
+input bool   InpUseDailyProfitTarget  = true;  // Stop trading for the day once profit target is hit
+input double InpDailyProfitTargetPct  = 30.0;  // Daily profit target as % of day-start balance (matches challenge table)
+input bool   InpDPTCloseOnHit         = true;  // Close all open positions when daily target is reached
+
+input group "=== V21: WIN-STREAK EQUITY LOCK ==="
+input int    InpWinLockMinWins    = 3;     // Consecutive wins needed to activate the balance floor
+input double InpWinLockRetainPct  = 70.0;  // Keep at least this % of peak balance after a win streak (0=disabled)
+
 //--- GLOBALS (V19 — unchanged)
 CTrade trade;
 int handleBB, handleRSI, handleADX, handleATR;
@@ -293,6 +322,18 @@ datetime g_V20LastDealScan = 0;
 // Tag flag for ExecuteHFTOrder: 0=MR (V19 default), 1=TM (V20 Trend-Momentum)
 int      g_V20ActiveEngine = 0;
 
+//--- GLOBALS (V21 — new)
+// Daily Profit Target
+double   g_DPTDayStartEquity = 0.0;  // Equity at day open — used for profit comparison (equity vs equity, no mismatch)
+datetime g_DPTDayStart       = 0;    // Timestamp of the current trading day
+bool     g_DPTReached        = false; // True = daily target hit; block new entries
+
+// Win-Streak Equity Lock
+int      g_ConsecWins    = 0;     // Running consecutive win counter
+// Ratcheting high-water balance floor — only ever increases, never resets downward.
+// Set to InpWinLockRetainPct% of peak balance after InpWinLockMinWins consecutive wins.
+double   g_WinLockFloor  = 0.0;  // Hard balance floor (0 = inactive)
+
 //+------------------------------------------------------------------+
 //| Forward declarations (V20 only — V19 helpers defined inline)     |
 //+------------------------------------------------------------------+
@@ -303,6 +344,9 @@ void    RunTrendMomentumEngineV20(double Ask, double Bid, double spread, double 
 bool    V20IsEngineShutdown(ENUM_ENGINE_V20 eng);
 void    V20UpdateBarCounter();
 void    V20ScanClosedDeals();
+void    CheckDailyProfitTarget();   // V21
+bool    IsDailyTargetReached();     // V21
+bool    IsWinLockViolated();        // V21
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -393,6 +437,13 @@ int OnInit()
    g_V20LastDealScan      = 0;
    g_V20ActiveEngine      = 0;
 
+   // Reset V21 state
+   g_DPTDayStartEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_DPTDayStart        = 0;
+   g_DPTReached         = false;
+   g_ConsecWins         = 0;
+   g_WinLockFloor       = 0.0;
+
    PrintFormat("SCALP GOLDEA V21.0 initialized. Symbol=%s TF=%s HTF=%s RegimeFilter=%s",
                _Symbol, EnumToString(_Period), EnumToString(InpHTF),
                InpV20UseRegimeFilter ? "ON" : "OFF");
@@ -419,18 +470,21 @@ void OnTick()
    UpdateTickMomentum();   // V15: first – lowest latency tick counters
    CheckEquityGuard();     // V18 Core 1: force-close if floating equity drops too far
    CheckFridayClose();     // V18 Core 3: auto-close on Friday
+   CheckDailyProfitTarget(); // V21: close all + lock day when profit target hit
    ManageHFTExits();
    CheckReentryArm();      // detect stop-outs; arm second-chance re-entry
 
    // V20: bar counter drives engine recovery — runs every tick, low cost
    V20UpdateBarCounter();
 
-   if(IsGlobalStopped())  return;  // V15: circuit breaker
-   if(IsEquityHalted())   return;  // V18 Core 1: equity guard halt
-   if(IsWeekendBlocked()) return;  // V18 Core 3: weekend protection
-   if(!IsTradingTime())   return;
-   if(DailyLimitsReached()) return;
-   if(PositionsTotal() > 0) return;
+   if(IsGlobalStopped())        return;  // V15: circuit breaker
+   if(IsEquityHalted())         return;  // V18 Core 1: equity guard halt
+   if(IsWeekendBlocked())       return;  // V18 Core 3: weekend protection
+   if(!IsTradingTime())         return;
+   if(DailyLimitsReached())     return;
+   if(IsDailyTargetReached())   return;  // V21: daily profit target reached – sit on gains
+   if(IsWinLockViolated())      return;  // V21: balance dropped below win-streak floor – protect
+   if(PositionsTotal() > 0)     return;
 
    double Ask    = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double Bid    = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -976,8 +1030,10 @@ void ExecuteHFTOrder(ENUM_ORDER_TYPE type, double price, double slPoints, double
       {
          double reduction = marginCap / marginReq;
          calculatedLot = MathFloor((calculatedLot * reduction) / stepVolume) * stepVolume;
-         // Recalculate margin after reduction
-         OrderCalcMargin(type, _Symbol, calculatedLot, price, marginReq);
+         // Recalculate margin after reduction; if call fails keep the (now-reduced) estimate
+         double reducedMargin = 0.0;
+         if(OrderCalcMargin(type, _Symbol, calculatedLot, price, reducedMargin))
+            marginReq = reducedMargin;
       }
    }
    if(calculatedLot < minVolume) return;
@@ -1281,6 +1337,7 @@ void CheckReentryArm()
          g_ReentryExpiry = TimeCurrent() + 6 * PeriodSeconds(_Period);
 
          if(InpUseLossScaler && !InpChallengeMode) g_ConsecLosses++;
+         g_ConsecWins = 0;   // V21: SL hit resets the win streak
 
          long posId = HistoryDealGetInteger(lastTicket, DEAL_POSITION_ID);
          HistorySelect(TimeCurrent() - 7 * 86400, TimeCurrent());
@@ -1299,10 +1356,34 @@ void CheckReentryArm()
       }
       else if(lastTicket > 0)
       {
-         if(InpUseLossScaler && !InpChallengeMode)
+         double dealProfit = HistoryDealGetDouble(lastTicket, DEAL_PROFIT);
+         if(dealProfit > 0)
          {
-            double dealProfit = HistoryDealGetDouble(lastTicket, DEAL_PROFIT);
-            if(dealProfit > 0 && g_ConsecLosses > 0) g_ConsecLosses--;
+            // Win path — update consecutive counters
+            if(InpUseLossScaler && !InpChallengeMode && g_ConsecLosses > 0)
+               g_ConsecLosses--;
+
+            // V21: Win-Streak Equity Lock
+            if(InpWinLockRetainPct > 0.0)
+            {
+               g_ConsecWins++;
+               if(g_ConsecWins >= InpWinLockMinWins)
+               {
+                  double peakBal = MathMax(AccountInfoDouble(ACCOUNT_BALANCE), g_WinLockFloor);
+                  double newFloor = peakBal * (InpWinLockRetainPct / 100.0);
+                  if(newFloor > g_WinLockFloor)
+                  {
+                     g_WinLockFloor = newFloor;
+                     PrintFormat("V21 WinLock: %d consecutive wins → floor set at $%.2f (%.0f%% of $%.2f)",
+                                 g_ConsecWins, g_WinLockFloor, InpWinLockRetainPct, peakBal);
+                  }
+               }
+            }
+         }
+         else if(dealProfit < 0)
+         {
+            // Loss resets the win streak (floor is kept — it only ever moves up)
+            g_ConsecWins = 0;
          }
       }
    }
@@ -1747,5 +1828,93 @@ void InitSymbolProfile()
    PrintFormat("V20 Auto-Config: %s RSI<%.0f/>%.0f ADX>%.0f/%.0f SL=%.0f TP=%.0f trail=%.0f/%.0f maxSpread=%d",
                _Symbol, g_RSIOversold, g_RSIOverbought, g_ADXMedium, g_ADXStrong,
                g_SLPips, g_TPPips, g_TrailDistPips, g_TrailStepPips, g_MaxSpread);
+}
+
+//+------------------------------------------------------------------+
+//| V21: DAILY PROFIT TARGET — 500-PIP CHALLENGE                     |
+//| Called every tick BEFORE ManageHFTExits so open positions are    |
+//| closed the moment equity crosses the day's profit goal.          |
+//+------------------------------------------------------------------+
+void CheckDailyProfitTarget()
+{
+   if(!InpUseDailyProfitTarget) return;
+
+   datetime todayStart = iTime(_Symbol, PERIOD_D1, 0);
+   if(todayStart == 0) return;
+
+   // New calendar day: snapshot day-start equity (equity vs equity — no overnight mismatch)
+   if(todayStart != g_DPTDayStart)
+   {
+      g_DPTDayStart        = todayStart;
+      g_DPTDayStartEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      g_DPTReached         = false;
+      PrintFormat("V21 DPT: new day – start equity $%.2f, target +%.0f%% ($%.2f)",
+                  g_DPTDayStartEquity, InpDailyProfitTargetPct,
+                  g_DPTDayStartEquity * InpDailyProfitTargetPct / 100.0);
+   }
+
+   if(g_DPTReached) return;   // already locked for today
+
+   // Compare current equity against day-start equity (both unrealised — consistent)
+   double equity    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dayProfit = equity - g_DPTDayStartEquity;
+   double target    = g_DPTDayStartEquity * (InpDailyProfitTargetPct / 100.0);
+
+   if(dayProfit >= target)
+   {
+      g_DPTReached = true;
+      PrintFormat("V21 DPT HIT: day profit $%.2f >= target $%.2f – locking gains for today",
+                  dayProfit, target);
+
+      if(InpDPTCloseOnHit)
+      {
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(PositionSelectByTicket(ticket) &&
+               PositionGetInteger(POSITION_MAGIC) == InpMagic)
+               trade.PositionClose(ticket, InpMaxSlippage);
+         }
+      }
+   }
+}
+
+bool IsDailyTargetReached()
+{
+   return (InpUseDailyProfitTarget && g_DPTReached);
+}
+
+//+------------------------------------------------------------------+
+//| V21: WIN-STREAK EQUITY LOCK                                      |
+//| Returns true (block all new entries) when the balance has fallen |
+//| below the floor set after a consecutive-win streak.              |
+//| The floor only ever rises — it is a ratcheting high-water mark.  |
+//+------------------------------------------------------------------+
+bool IsWinLockViolated()
+{
+   if(InpWinLockRetainPct <= 0.0) return false;
+   if(g_WinLockFloor <= 0.0)      return false;
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance < g_WinLockFloor)
+   {
+      // Only act once per breach — subsequent ticks are handled by IsEquityHalted() gate
+      if(g_EquityHaltUntil == 0 || TimeCurrent() >= g_EquityHaltUntil)
+      {
+         // Close all open EA positions to stop further erosion
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(PositionSelectByTicket(ticket) &&
+               PositionGetInteger(POSITION_MAGIC) == InpMagic)
+               trade.PositionClose(ticket, InpMaxSlippage);
+         }
+         g_EquityHaltUntil = TimeCurrent() + (long)InpEquityHaltHours * 3600;
+         PrintFormat("V21 WinLock VIOLATED: balance $%.2f < floor $%.2f → halt %d h",
+                     balance, g_WinLockFloor, InpEquityHaltHours);
+      }
+      return true;
+   }
+   return false;
 }
 //+------------------------------------------------------------------+
