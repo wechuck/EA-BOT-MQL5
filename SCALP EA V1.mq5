@@ -205,6 +205,10 @@ input group "=== V21: MR DIRECTIONAL GUARD ==="
 input double InpV21MaxDISpreadMR   = 15.0;  // Block MR reversal when opposing DI spread exceeds this
 input double InpV21ReentryMaxDI    = 12.0;  // Max opposing DI spread allowed for re-entry (tighter)
 
+input group "=== V21: POSITION SIZING GUARD ==="
+input double InpV21MinMarginLevel  = 300.0; // Minimum margin level (%) allowed after new trade (0=disabled)
+input double InpV21MaxMarginUsePct = 60.0;  // Max % of free margin one trade may consume (replaces old 90%)
+
 //--- GLOBALS (V19 — unchanged)
 CTrade trade;
 int handleBB, handleRSI, handleADX, handleATR;
@@ -906,9 +910,11 @@ void V20ScanClosedDeals()
 
 //+------------------------------------------------------------------+
 //| EXECUTION: Fire Scalp Payload with Lot Calculation               |
-//| FIX 1 – Micro-Account Lot Boost included                         |
+//| FIX 1 – Micro-Account Lot Boost included (non-challenge only)    |
 //| CHALLENGE – 30% risk, adaptive TP when enabled                   |
 //| V20 ADD – "V20_TM|" comment prefix when g_V20ActiveEngine == 1  |
+//| V21 FIX – correct OrderCalcMargin type; tighter margin cap;      |
+//|           min margin-level guard; no boost in challenge mode     |
 //+------------------------------------------------------------------+
 void ExecuteHFTOrder(ENUM_ORDER_TYPE type, double price, double slPoints, double assignedRisk)
 {
@@ -943,30 +949,56 @@ void ExecuteHFTOrder(ENUM_ORDER_TYPE type, double price, double slPoints, double
    if(calculatedLot > maxVolume) calculatedLot = maxVolume;
    if(calculatedLot < minVolume) calculatedLot = minVolume;
 
-   // FIX 1 – Micro-Account Lot Boost
+   // FIX 1 – Micro-Account Lot Boost (non-challenge only)
+   // In challenge mode the 30% risk is already the aggressive sizing lever;
+   // stacking a 6× lot boost on top produces deposit loads > 400% and blows accounts.
    bool isMicroAccount = (rawLot <= minVolume);
-   if(isMicroAccount)
+   if(isMicroAccount && !InpChallengeMode)
    {
       double boostMult = 1.0;
-      if(assignedRisk >= InpRiskLevel4)      boostMult = InpChallengeMode ? 6.0 : 4.0;
-      else if(assignedRisk >= InpRiskLevel3) boostMult = InpChallengeMode ? 5.0 : 3.0;
-      else if(assignedRisk >= InpRiskLevel2) boostMult = InpChallengeMode ? 3.0 : 2.0;
+      if(assignedRisk >= InpRiskLevel4)      boostMult = 4.0;
+      else if(assignedRisk >= InpRiskLevel3) boostMult = 3.0;
+      else if(assignedRisk >= InpRiskLevel2) boostMult = 2.0;
       calculatedLot = MathFloor((minVolume * boostMult) / stepVolume) * stepVolume;
       if(calculatedLot > maxVolume) calculatedLot = maxVolume;
       if(calculatedLot < minVolume) calculatedLot = minVolume;
    }
 
-   // Margin safety check
+   // V21 FIX: use the actual order type — always passing ORDER_TYPE_BUY produced
+   // incorrect margin estimates for SELL positions on hedging-mode brokers.
+   // V21 FIX: reduce cap from 90% → InpV21MaxMarginUsePct (default 60%) so that
+   // one trade never consumes the majority of free margin.
    double marginReq = 0.0;
-   if(OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, calculatedLot, price, marginReq))
+   if(OrderCalcMargin(type, _Symbol, calculatedLot, price, marginReq))
    {
-      if(marginReq > freeMargin * 0.90)
+      double marginCap = freeMargin * (InpV21MaxMarginUsePct / 100.0);
+      if(marginReq > marginCap)
       {
-         double reduction = (freeMargin * 0.90) / marginReq;
+         double reduction = marginCap / marginReq;
          calculatedLot = MathFloor((calculatedLot * reduction) / stepVolume) * stepVolume;
+         // Recalculate margin after reduction
+         OrderCalcMargin(type, _Symbol, calculatedLot, price, marginReq);
       }
    }
    if(calculatedLot < minVolume) return;
+
+   // V21 FIX: Minimum margin level guard — ensures the account margin level
+   // stays above InpV21MinMarginLevel after this trade is placed.
+   // Deposit loads of 489% seen in testing were caused by this check being absent.
+   if(InpV21MinMarginLevel > 0.0 && marginReq > 0.0)
+   {
+      double equity        = AccountInfoDouble(ACCOUNT_EQUITY);
+      double existingMargin= AccountInfoDouble(ACCOUNT_MARGIN);
+      double projectedLevel= (existingMargin + marginReq > 0.0)
+                             ? (equity / (existingMargin + marginReq) * 100.0)
+                             : 9999.0;
+      if(projectedLevel < InpV21MinMarginLevel)
+      {
+         PrintFormat("V21 MarginGuard: projected level %.1f%% < min %.1f%% – trade blocked",
+                     projectedLevel, InpV21MinMarginLevel);
+         return;
+      }
+   }
 
    // Build comment label
    string comment;
