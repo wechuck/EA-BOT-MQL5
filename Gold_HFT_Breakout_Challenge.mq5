@@ -19,8 +19,9 @@ input bool     LockProfitsDaily = true;         // Lock Profits at Daily Target
 input group "=== Trading Parameters ==="
 input bool     UseDynamicLotSize = true;        // Use Dynamic Lot Sizing
 input double   FixedLotSize = 0.01;             // Fixed Lot Size (if not dynamic)
-input double   RiskPercentPerTrade = 2.0;       // Risk Per Trade (% of balance)
-input double   MaxLotSize = 0.1;                // Maximum Lot Size
+input double   RiskPercentPerTrade = 5.0;       // Risk Per Trade (% of balance) - AGGRESSIVE
+input double   MaxLotSize = 100.0;              // Maximum Lot Size
+input double   MarginUsagePercent = 80.0;       // Max Margin Usage (%)
 input int      StopLossPips = 150;              // Stop Loss (pips)
 input int      TakeProfitPips = 500;            // Take Profit (pips)
 input int      BreakevenPips = 50;              // Move to Breakeven at (pips)
@@ -29,21 +30,23 @@ input int      TrailingStepPips = 20;           // Trailing Step (pips)
 
 input group "=== Breakout Strategy ==="
 input int      BreakoutPeriod = 20;             // Breakout Period (bars)
-input int      BreakoutBuffer = 5;              // Breakout Buffer (pips)
-input int      MinVolatilityPips = 30;          // Minimum Volatility (pips)
+input int      BreakoutBuffer = 10;             // Breakout Buffer (pips) - INCREASED
+input int      MinVolatilityPips = 50;          // Minimum Volatility (pips) - INCREASED
 input bool     UseMultiTimeframe = true;        // Use Multi-Timeframe Confirmation
 input bool     UseRSIFilter = true;             // Use RSI Filter
 input int      RSIPeriod = 14;                  // RSI Period
-input int      RSIUpperLevel = 70;              // RSI Overbought Level
-input int      RSILowerLevel = 30;              // RSI Oversold Level
+input int      RSIUpperLevel = 65;              // RSI Overbought Level - STRICTER
+input int      RSILowerLevel = 35;              // RSI Oversold Level - STRICTER
 input bool     UseATRFilter = true;             // Use ATR Volatility Filter
 input int      ATRPeriod = 14;                  // ATR Period
-input double   ATRMultiplier = 1.5;             // ATR Multiplier for volatility
+input double   ATRMultiplier = 2.0;             // ATR Multiplier - STRICTER
 input bool     UseMomentumFilter = true;        // Use Momentum Confirmation
 input int      MomentumPeriod = 10;             // Momentum Period
 input bool     UseADXFilter = true;             // Use ADX Trend Filter
 input int      ADXPeriod = 14;                  // ADX Period
-input double   ADXMinLevel = 25.0;              // Minimum ADX Level (trend strength)
+input double   ADXMinLevel = 30.0;              // Minimum ADX Level - STRICTER (strong trend required)
+input bool     UseTrendAlignment = true;        // Require Multi-Timeframe Trend Alignment
+input bool     UseVolumeConfirmation = true;    // Use Volume Spike Confirmation
 
 input group "=== Risk Management ==="
 input int      MaxSpreadPips = 40;              // Maximum Allowed Spread (pips)
@@ -319,34 +322,46 @@ void CheckForBreakout()
     //--- Check for bullish breakout
     if(ask > buyLevel)
     {
-        // RSI Filter - avoid overbought
+        // RSI Filter - avoid overbought (STRICT)
         if(UseRSIFilter && !CheckRSI(true)) return;
 
-        // Trend confirmation
+        // Trend confirmation - MUST align
         if(UseMultiTimeframe && !ConfirmTrend(true)) return;
 
-        // Momentum confirmation
+        // Momentum confirmation - MUST be positive
         if(UseMomentumFilter && !CheckMomentum(true)) return;
 
-        // ADX Filter - ensure strong trend
+        // ADX Filter - MUST show strong trend
         if(UseADXFilter && !CheckADX(true)) return;
+
+        // Multi-timeframe trend alignment - ALL timeframes must agree
+        if(UseTrendAlignment && !CheckTrendAlignment(true)) return;
+
+        // Volume confirmation - require volume spike
+        if(UseVolumeConfirmation && !CheckVolumeSpike()) return;
 
         OpenPosition(ORDER_TYPE_BUY);
     }
     //--- Check for bearish breakout
     else if(bid < sellLevel)
     {
-        // RSI Filter - avoid oversold
+        // RSI Filter - avoid oversold (STRICT)
         if(UseRSIFilter && !CheckRSI(false)) return;
 
-        // Trend confirmation
+        // Trend confirmation - MUST align
         if(UseMultiTimeframe && !ConfirmTrend(false)) return;
 
-        // Momentum confirmation
+        // Momentum confirmation - MUST be negative
         if(UseMomentumFilter && !CheckMomentum(false)) return;
 
-        // ADX Filter - ensure strong trend
+        // ADX Filter - MUST show strong trend
         if(UseADXFilter && !CheckADX(false)) return;
+
+        // Multi-timeframe trend alignment - ALL timeframes must agree
+        if(UseTrendAlignment && !CheckTrendAlignment(false)) return;
+
+        // Volume confirmation - require volume spike
+        if(UseVolumeConfirmation && !CheckVolumeSpike()) return;
 
         OpenPosition(ORDER_TYPE_SELL);
     }
@@ -390,13 +405,13 @@ bool CheckRSI(bool bullish)
 
     if(bullish)
     {
-        // For buy, RSI should not be overbought
-        return rsi[0] < RSIUpperLevel && rsi[0] > 40;
+        // For buy, RSI must be in healthy range (45-65) - not overbought
+        return rsi[0] < RSIUpperLevel && rsi[0] > 45;
     }
     else
     {
-        // For sell, RSI should not be oversold
-        return rsi[0] > RSILowerLevel && rsi[0] < 60;
+        // For sell, RSI must be in healthy range (35-55) - not oversold
+        return rsi[0] > RSILowerLevel && rsi[0] < 55;
     }
 }
 
@@ -494,6 +509,98 @@ bool CheckStrongSignal()
 }
 
 //+------------------------------------------------------------------+
+//| Check multi-timeframe trend alignment                            |
+//+------------------------------------------------------------------+
+bool CheckTrendAlignment(bool bullish)
+{
+    if(!UseTrendAlignment)
+        return true;
+
+    // Check M5, M15, M30, H1 - all must agree
+    double ma5_M5[], ma5_M15[], ma5_M30[], ma5_H1[];
+    ArraySetAsSeries(ma5_M5, true);
+    ArraySetAsSeries(ma5_M15, true);
+    ArraySetAsSeries(ma5_M30, true);
+    ArraySetAsSeries(ma5_H1, true);
+
+    // Get MA values for different timeframes
+    int handle_M5 = iMA(_Symbol, PERIOD_M5, 5, 0, MODE_SMA, PRICE_CLOSE);
+    int handle_M15 = iMA(_Symbol, PERIOD_M15, 5, 0, MODE_SMA, PRICE_CLOSE);
+    int handle_M30 = iMA(_Symbol, PERIOD_M30, 5, 0, MODE_SMA, PRICE_CLOSE);
+    int handle_H1 = iMA(_Symbol, PERIOD_H1, 5, 0, MODE_SMA, PRICE_CLOSE);
+
+    if(handle_M5 == INVALID_HANDLE || handle_M15 == INVALID_HANDLE ||
+       handle_M30 == INVALID_HANDLE || handle_H1 == INVALID_HANDLE)
+        return true; // If can't check, allow trade
+
+    if(CopyBuffer(handle_M5, 0, 0, 2, ma5_M5) <= 0) return true;
+    if(CopyBuffer(handle_M15, 0, 0, 2, ma5_M15) <= 0) return true;
+    if(CopyBuffer(handle_M30, 0, 0, 2, ma5_M30) <= 0) return true;
+    if(CopyBuffer(handle_H1, 0, 0, 2, ma5_H1) <= 0) return true;
+
+    IndicatorRelease(handle_M5);
+    IndicatorRelease(handle_M15);
+    IndicatorRelease(handle_M30);
+    IndicatorRelease(handle_H1);
+
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+    if(bullish)
+    {
+        // All MAs must be rising and price above all
+        bool m5Rising = ma5_M5[0] > ma5_M5[1];
+        bool m15Rising = ma5_M15[0] > ma5_M15[1];
+        bool m30Rising = ma5_M30[0] > ma5_M30[1];
+        bool h1Rising = ma5_H1[0] > ma5_H1[1];
+
+        bool priceAbove = currentPrice > ma5_M5[0] && currentPrice > ma5_M15[0] &&
+                         currentPrice > ma5_M30[0] && currentPrice > ma5_H1[0];
+
+        return m5Rising && m15Rising && m30Rising && h1Rising && priceAbove;
+    }
+    else
+    {
+        // All MAs must be falling and price below all
+        bool m5Falling = ma5_M5[0] < ma5_M5[1];
+        bool m15Falling = ma5_M15[0] < ma5_M15[1];
+        bool m30Falling = ma5_M30[0] < ma5_M30[1];
+        bool h1Falling = ma5_H1[0] < ma5_H1[1];
+
+        bool priceBelow = currentPrice < ma5_M5[0] && currentPrice < ma5_M15[0] &&
+                         currentPrice < ma5_M30[0] && currentPrice < ma5_H1[0];
+
+        return m5Falling && m15Falling && m30Falling && h1Falling && priceBelow;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check volume spike confirmation                                  |
+//+------------------------------------------------------------------+
+bool CheckVolumeSpike()
+{
+    if(!UseVolumeConfirmation)
+        return true;
+
+    long volume[];
+    ArraySetAsSeries(volume, true);
+
+    // Get recent volume data
+    if(CopyTickVolume(_Symbol, PERIOD_M5, 0, 20, volume) < 20)
+        return true; // If can't check, allow trade
+
+    // Calculate average volume
+    double avgVolume = 0;
+    for(int i = 1; i < 20; i++)
+    {
+        avgVolume += volume[i];
+    }
+    avgVolume = avgVolume / 19.0;
+
+    // Current volume must be at least 1.5x average (volume spike)
+    return volume[0] >= avgVolume * 1.5;
+}
+
+//+------------------------------------------------------------------+
 //| Calculate dynamic lot size based on account balance               |
 //+------------------------------------------------------------------+
 double CalculateLotSize()
@@ -502,6 +609,10 @@ double CalculateLotSize()
         return FixedLotSize;
 
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+
+    // Calculate risk amount (aggressive 5% default)
     double riskAmount = balance * (RiskPercentPerTrade / 100.0);
 
     // Calculate pip value for the symbol
@@ -515,10 +626,30 @@ double CalculateLotSize()
     // Calculate lot size based on risk
     double lotSize = riskAmount / (StopLossPips * pipValue);
 
-    // Apply lot size constraints
+    // Check margin requirements
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    double requiredMargin = 0;
+
+    // Calculate required margin for 1 lot
+    if(!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, SymbolInfoDouble(_Symbol, SYMBOL_ASK), requiredMargin))
+    {
+        Print("Failed to calculate margin");
+        return FixedLotSize;
+    }
+
+    // Calculate max lot based on available margin (use 80% of free margin)
+    double maxLotByMargin = (freeMargin * MarginUsagePercent / 100.0) / requiredMargin;
+
+    // Use the smaller of risk-based or margin-based lot size
+    if(maxLotByMargin < lotSize)
+    {
+        lotSize = maxLotByMargin;
+        Print("⚠️ Lot size limited by margin: ", DoubleToString(lotSize, 2));
+    }
+
+    // Apply constraints
     double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
     // Ensure we don't exceed MaxLotSize parameter
     if(lotSize > MaxLotSize)
