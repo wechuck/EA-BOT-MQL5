@@ -41,6 +41,9 @@ input int      ATRPeriod = 14;                  // ATR Period
 input double   ATRMultiplier = 1.5;             // ATR Multiplier for volatility
 input bool     UseMomentumFilter = true;        // Use Momentum Confirmation
 input int      MomentumPeriod = 10;             // Momentum Period
+input bool     UseADXFilter = true;             // Use ADX Trend Filter
+input int      ADXPeriod = 14;                  // ADX Period
+input double   ADXMinLevel = 25.0;              // Minimum ADX Level (trend strength)
 
 input group "=== Risk Management ==="
 input int      MaxSpreadPips = 40;              // Maximum Allowed Spread (pips)
@@ -51,6 +54,9 @@ input bool     UseTimeBasedExit = true;         // Use Time-Based Exit for Losin
 input int      MaxTradeMinutes = 60;            // Max Minutes in Losing Trade
 input double   PartialProfitPercent = 50.0;     // Close % at First Profit Target
 input int      PartialProfitPips = 250;         // First Profit Target (pips)
+input bool     StopAfterDailyLoss = true;       // Stop Trading After Daily Loss
+input double   MaxDailyLossDollars = 1.0;       // Max Daily Loss in Dollars
+input bool     ResumeOnGoodSignal = true;       // Resume Trading on Strong Signal
 
 input group "=== Session Filters ==="
 input bool     TradeLondonSession = true;       // Trade London Session
@@ -79,6 +85,11 @@ double pointValue = 0.0;
 int rsiHandle = INVALID_HANDLE;
 int atrHandle = INVALID_HANDLE;
 int maHandle = INVALID_HANDLE;
+int adxHandle = INVALID_HANDLE;
+
+// Daily loss tracking
+bool dailyLossLimitReached = false;
+double dailyLoss = 0.0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -125,6 +136,16 @@ int OnInit()
         }
     }
 
+    if(UseADXFilter)
+    {
+        adxHandle = iADX(_Symbol, PERIOD_M5, ADXPeriod);
+        if(adxHandle == INVALID_HANDLE)
+        {
+            Print("Error creating ADX indicator");
+            return(INIT_FAILED);
+        }
+    }
+
     //--- Initialize daily tracking
     ResetDailyCounters();
 
@@ -147,6 +168,7 @@ void OnDeinit(const int reason)
     if(rsiHandle != INVALID_HANDLE) IndicatorRelease(rsiHandle);
     if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
     if(maHandle != INVALID_HANDLE) IndicatorRelease(maHandle);
+    if(adxHandle != INVALID_HANDLE) IndicatorRelease(adxHandle);
 
     //--- Remove all UI objects
     ObjectsDeleteAll(0, "HFT_");
@@ -211,6 +233,20 @@ bool ShouldTrade()
 {
     //--- Check daily target lock
     if(dailyTargetReached) return false;
+
+    //--- Check daily loss limit
+    if(StopAfterDailyLoss && dailyLossLimitReached)
+    {
+        // Allow resuming only on very strong signals
+        if(ResumeOnGoodSignal && CheckStrongSignal())
+        {
+            Print("💪 Strong signal detected - resuming trading after daily loss");
+        }
+        else
+        {
+            return false;
+        }
+    }
 
     //--- Check max daily trades
     if(dailyTradeCount >= MaxDailyTrades)
@@ -292,6 +328,9 @@ void CheckForBreakout()
         // Momentum confirmation
         if(UseMomentumFilter && !CheckMomentum(true)) return;
 
+        // ADX Filter - ensure strong trend
+        if(UseADXFilter && !CheckADX(true)) return;
+
         OpenPosition(ORDER_TYPE_BUY);
     }
     //--- Check for bearish breakout
@@ -305,6 +344,9 @@ void CheckForBreakout()
 
         // Momentum confirmation
         if(UseMomentumFilter && !CheckMomentum(false)) return;
+
+        // ADX Filter - ensure strong trend
+        if(UseADXFilter && !CheckADX(false)) return;
 
         OpenPosition(ORDER_TYPE_SELL);
     }
@@ -400,6 +442,55 @@ bool CheckMomentum(bool bullish)
         return currentMomentum > 0; // Positive momentum for buy
     else
         return currentMomentum < 0; // Negative momentum for sell
+}
+
+//+------------------------------------------------------------------+
+//| Check ADX filter                                                  |
+//+------------------------------------------------------------------+
+bool CheckADX(bool bullish)
+{
+    if(!UseADXFilter || adxHandle == INVALID_HANDLE)
+        return true;
+
+    double adxMain[], adxPlus[], adxMinus[];
+    ArraySetAsSeries(adxMain, true);
+    ArraySetAsSeries(adxPlus, true);
+    ArraySetAsSeries(adxMinus, true);
+
+    if(CopyBuffer(adxHandle, 0, 0, 1, adxMain) <= 0)
+        return true;
+    if(CopyBuffer(adxHandle, 1, 0, 1, adxPlus) <= 0)
+        return true;
+    if(CopyBuffer(adxHandle, 2, 0, 1, adxMinus) <= 0)
+        return true;
+
+    // ADX must be above minimum level (strong trend)
+    if(adxMain[0] < ADXMinLevel)
+        return false;
+
+    // Check directional movement
+    if(bullish)
+        return adxPlus[0] > adxMinus[0]; // +DI above -DI for uptrend
+    else
+        return adxMinus[0] > adxPlus[0]; // -DI above +DI for downtrend
+}
+
+//+------------------------------------------------------------------+
+//| Check for strong signal to resume trading                        |
+//+------------------------------------------------------------------+
+bool CheckStrongSignal()
+{
+    if(!UseADXFilter || adxHandle == INVALID_HANDLE)
+        return false;
+
+    double adxMain[];
+    ArraySetAsSeries(adxMain, true);
+
+    if(CopyBuffer(adxHandle, 0, 0, 1, adxMain) <= 0)
+        return false;
+
+    // Require very strong trend (ADX > 30) to resume after loss
+    return adxMain[0] > 30.0;
 }
 
 //+------------------------------------------------------------------+
@@ -706,8 +797,10 @@ void ResetDailyCounters()
 {
     dailyTradeCount = 0;
     dailyProfit = 0.0;
+    dailyLoss = 0.0;
     dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     dailyTargetReached = false;
+    dailyLossLimitReached = false;
 
     Print("📅 Daily counters reset | Balance: $", DoubleToString(dailyStartBalance, 2));
 }
@@ -719,6 +812,20 @@ void UpdateDailyProfit()
 {
     double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
     dailyProfit = currentEquity - dailyStartBalance;
+
+    // Check for daily loss limit
+    if(StopAfterDailyLoss && dailyProfit < 0)
+    {
+        dailyLoss = MathAbs(dailyProfit);
+
+        if(dailyLoss >= MaxDailyLossDollars && !dailyLossLimitReached)
+        {
+            dailyLossLimitReached = true;
+            CloseAllPositions("Daily loss limit reached");
+            Print("🛑 DAILY LOSS LIMIT REACHED: $", DoubleToString(dailyLoss, 2));
+            Print("⏸️ Trading paused until next day or strong signal");
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -795,7 +902,12 @@ void UpdateDashboard()
     string status = "🟢 ACTIVE";
     color statusColor = ColorProfit;
 
-    if(dailyTargetReached)
+    if(dailyLossLimitReached)
+    {
+        status = "🛑 DAILY LOSS LIMIT";
+        statusColor = ColorLoss;
+    }
+    else if(dailyTargetReached)
     {
         status = "🎯 TARGET REACHED!";
         statusColor = clrGold;
