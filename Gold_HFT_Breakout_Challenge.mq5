@@ -30,23 +30,23 @@ input int      TrailingStepPips = 20;           // Trailing Step (pips)
 
 input group "=== Breakout Strategy ==="
 input int      BreakoutPeriod = 20;             // Breakout Period (bars)
-input int      BreakoutBuffer = 10;             // Breakout Buffer (pips) - INCREASED
-input int      MinVolatilityPips = 50;          // Minimum Volatility (pips) - INCREASED
+input int      BreakoutBuffer = 8;              // Breakout Buffer (pips) - BALANCED
+input int      MinVolatilityPips = 40;          // Minimum Volatility (pips) - BALANCED
 input bool     UseMultiTimeframe = true;        // Use Multi-Timeframe Confirmation
 input bool     UseRSIFilter = true;             // Use RSI Filter
 input int      RSIPeriod = 14;                  // RSI Period
-input int      RSIUpperLevel = 65;              // RSI Overbought Level - STRICTER
-input int      RSILowerLevel = 35;              // RSI Oversold Level - STRICTER
+input int      RSIUpperLevel = 70;              // RSI Overbought Level - BALANCED
+input int      RSILowerLevel = 30;              // RSI Oversold Level - BALANCED
 input bool     UseATRFilter = true;             // Use ATR Volatility Filter
 input int      ATRPeriod = 14;                  // ATR Period
-input double   ATRMultiplier = 2.0;             // ATR Multiplier - STRICTER
+input double   ATRMultiplier = 1.5;             // ATR Multiplier - BALANCED
 input bool     UseMomentumFilter = true;        // Use Momentum Confirmation
 input int      MomentumPeriod = 10;             // Momentum Period
 input bool     UseADXFilter = true;             // Use ADX Trend Filter
 input int      ADXPeriod = 14;                  // ADX Period
-input double   ADXMinLevel = 30.0;              // Minimum ADX Level - STRICTER (strong trend required)
-input bool     UseTrendAlignment = true;        // Require Multi-Timeframe Trend Alignment
-input bool     UseVolumeConfirmation = true;    // Use Volume Spike Confirmation
+input double   ADXMinLevel = 25.0;              // Minimum ADX Level - BALANCED (moderate trend)
+input bool     UseTrendAlignment = false;       // Multi-Timeframe Trend Alignment (OPTIONAL - very strict)
+input bool     UseVolumeConfirmation = false;   // Volume Spike Confirmation (OPTIONAL - very strict)
 
 input group "=== Risk Management ==="
 input int      MaxSpreadPips = 40;              // Maximum Allowed Spread (pips)
@@ -73,6 +73,7 @@ input color    ColorProfit = clrLime;           // Profit Color
 input color    ColorLoss = clrRed;              // Loss Color
 input color    ColorInfo = clrWhite;            // Info Color
 input int      UIRefreshSeconds = 1;            // UI Refresh Rate (seconds)
+input bool     EnableDebugLog = false;          // Enable Debug Logging for Entry Signals
 
 //--- Global Variables
 CTrade trade;
@@ -305,12 +306,16 @@ void CheckForBreakout()
     double volatility = (highLevel - lowLevel) / pointValue / 10.0;
     if(volatility < MinVolatilityPips)
     {
+        if(EnableDebugLog)
+            Print("❌ Volatility too low: ", DoubleToString(volatility, 1), " pips (need ", MinVolatilityPips, ")");
         return; // Not enough volatility
     }
 
     //--- ATR Filter - ensure market is active enough
     if(UseATRFilter && !CheckATRFilter())
     {
+        if(EnableDebugLog)
+            Print("❌ ATR filter failed");
         return;
     }
 
@@ -322,46 +327,106 @@ void CheckForBreakout()
     //--- Check for bullish breakout
     if(ask > buyLevel)
     {
+        if(EnableDebugLog)
+            Print("🔍 Bullish breakout detected at ", DoubleToString(ask, _Digits));
+
         // RSI Filter - avoid overbought (STRICT)
-        if(UseRSIFilter && !CheckRSI(true)) return;
+        if(UseRSIFilter && !CheckRSI(true))
+        {
+            if(EnableDebugLog) Print("❌ RSI filter failed for BUY");
+            return;
+        }
 
         // Trend confirmation - MUST align
-        if(UseMultiTimeframe && !ConfirmTrend(true)) return;
+        if(UseMultiTimeframe && !ConfirmTrend(true))
+        {
+            if(EnableDebugLog) Print("❌ Trend confirmation failed for BUY");
+            return;
+        }
 
         // Momentum confirmation - MUST be positive
-        if(UseMomentumFilter && !CheckMomentum(true)) return;
+        if(UseMomentumFilter && !CheckMomentum(true))
+        {
+            if(EnableDebugLog) Print("❌ Momentum filter failed for BUY");
+            return;
+        }
 
         // ADX Filter - MUST show strong trend
-        if(UseADXFilter && !CheckADX(true)) return;
+        if(UseADXFilter && !CheckADX(true))
+        {
+            if(EnableDebugLog) Print("❌ ADX filter failed for BUY");
+            return;
+        }
 
         // Multi-timeframe trend alignment - ALL timeframes must agree
-        if(UseTrendAlignment && !CheckTrendAlignment(true)) return;
+        if(UseTrendAlignment && !CheckTrendAlignment(true))
+        {
+            if(EnableDebugLog) Print("❌ Trend alignment filter failed for BUY");
+            return;
+        }
 
         // Volume confirmation - require volume spike
-        if(UseVolumeConfirmation && !CheckVolumeSpike()) return;
+        if(UseVolumeConfirmation && !CheckVolumeSpike())
+        {
+            if(EnableDebugLog) Print("❌ Volume confirmation failed for BUY");
+            return;
+        }
+
+        if(EnableDebugLog)
+            Print("✅ All filters passed - Opening BUY position");
 
         OpenPosition(ORDER_TYPE_BUY);
     }
     //--- Check for bearish breakout
     else if(bid < sellLevel)
     {
+        if(EnableDebugLog)
+            Print("🔍 Bearish breakout detected at ", DoubleToString(bid, _Digits));
+
         // RSI Filter - avoid oversold (STRICT)
-        if(UseRSIFilter && !CheckRSI(false)) return;
+        if(UseRSIFilter && !CheckRSI(false))
+        {
+            if(EnableDebugLog) Print("❌ RSI filter failed for SELL");
+            return;
+        }
 
         // Trend confirmation - MUST align
-        if(UseMultiTimeframe && !ConfirmTrend(false)) return;
+        if(UseMultiTimeframe && !ConfirmTrend(false))
+        {
+            if(EnableDebugLog) Print("❌ Trend confirmation failed for SELL");
+            return;
+        }
 
         // Momentum confirmation - MUST be negative
-        if(UseMomentumFilter && !CheckMomentum(false)) return;
+        if(UseMomentumFilter && !CheckMomentum(false))
+        {
+            if(EnableDebugLog) Print("❌ Momentum filter failed for SELL");
+            return;
+        }
 
         // ADX Filter - MUST show strong trend
-        if(UseADXFilter && !CheckADX(false)) return;
+        if(UseADXFilter && !CheckADX(false))
+        {
+            if(EnableDebugLog) Print("❌ ADX filter failed for SELL");
+            return;
+        }
 
         // Multi-timeframe trend alignment - ALL timeframes must agree
-        if(UseTrendAlignment && !CheckTrendAlignment(false)) return;
+        if(UseTrendAlignment && !CheckTrendAlignment(false))
+        {
+            if(EnableDebugLog) Print("❌ Trend alignment filter failed for SELL");
+            return;
+        }
 
         // Volume confirmation - require volume spike
-        if(UseVolumeConfirmation && !CheckVolumeSpike()) return;
+        if(UseVolumeConfirmation && !CheckVolumeSpike())
+        {
+            if(EnableDebugLog) Print("❌ Volume confirmation failed for SELL");
+            return;
+        }
+
+        if(EnableDebugLog)
+            Print("✅ All filters passed - Opening SELL position");
 
         OpenPosition(ORDER_TYPE_SELL);
     }
@@ -405,13 +470,13 @@ bool CheckRSI(bool bullish)
 
     if(bullish)
     {
-        // For buy, RSI must be in healthy range (45-65) - not overbought
-        return rsi[0] < RSIUpperLevel && rsi[0] > 45;
+        // For buy, RSI must not be overbought (< 70)
+        return rsi[0] < RSIUpperLevel && rsi[0] > 35;
     }
     else
     {
-        // For sell, RSI must be in healthy range (35-55) - not oversold
-        return rsi[0] > RSILowerLevel && rsi[0] < 55;
+        // For sell, RSI must not be oversold (> 30)
+        return rsi[0] > RSILowerLevel && rsi[0] < 65;
     }
 }
 
