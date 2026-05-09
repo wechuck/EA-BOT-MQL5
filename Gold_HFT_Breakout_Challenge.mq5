@@ -32,12 +32,25 @@ input int      BreakoutPeriod = 20;             // Breakout Period (bars)
 input int      BreakoutBuffer = 5;              // Breakout Buffer (pips)
 input int      MinVolatilityPips = 30;          // Minimum Volatility (pips)
 input bool     UseMultiTimeframe = true;        // Use Multi-Timeframe Confirmation
+input bool     UseRSIFilter = true;             // Use RSI Filter
+input int      RSIPeriod = 14;                  // RSI Period
+input int      RSIUpperLevel = 70;              // RSI Overbought Level
+input int      RSILowerLevel = 30;              // RSI Oversold Level
+input bool     UseATRFilter = true;             // Use ATR Volatility Filter
+input int      ATRPeriod = 14;                  // ATR Period
+input double   ATRMultiplier = 1.5;             // ATR Multiplier for volatility
+input bool     UseMomentumFilter = true;        // Use Momentum Confirmation
+input int      MomentumPeriod = 10;             // Momentum Period
 
 input group "=== Risk Management ==="
 input int      MaxSpreadPips = 40;              // Maximum Allowed Spread (pips)
 input int      MaxSlippagePips = 40;            // Maximum Allowed Slippage (pips)
 input double   MaxDailyDrawdownPercent = 30.0;  // Max Daily Drawdown (%)
 input int      MaxConcurrentPositions = 2;      // Max Concurrent Positions
+input bool     UseTimeBasedExit = true;         // Use Time-Based Exit for Losing Trades
+input int      MaxTradeMinutes = 60;            // Max Minutes in Losing Trade
+input double   PartialProfitPercent = 50.0;     // Close % at First Profit Target
+input int      PartialProfitPips = 250;         // First Profit Target (pips)
 
 input group "=== Session Filters ==="
 input bool     TradeLondonSession = true;       // Trade London Session
@@ -62,6 +75,11 @@ double dailyStartBalance = 0.0;
 bool dailyTargetReached = false;
 double pointValue = 0.0;
 
+// Indicator handles
+int rsiHandle = INVALID_HANDLE;
+int atrHandle = INVALID_HANDLE;
+int maHandle = INVALID_HANDLE;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -75,6 +93,37 @@ int OnInit()
 
     //--- Calculate point value
     pointValue = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+    //--- Initialize indicators
+    if(UseRSIFilter)
+    {
+        rsiHandle = iRSI(_Symbol, PERIOD_M5, RSIPeriod, PRICE_CLOSE);
+        if(rsiHandle == INVALID_HANDLE)
+        {
+            Print("Error creating RSI indicator");
+            return(INIT_FAILED);
+        }
+    }
+
+    if(UseATRFilter)
+    {
+        atrHandle = iATR(_Symbol, PERIOD_M5, ATRPeriod);
+        if(atrHandle == INVALID_HANDLE)
+        {
+            Print("Error creating ATR indicator");
+            return(INIT_FAILED);
+        }
+    }
+
+    if(UseMultiTimeframe)
+    {
+        maHandle = iMA(_Symbol, PERIOD_M15, 20, 0, MODE_SMA, PRICE_CLOSE);
+        if(maHandle == INVALID_HANDLE)
+        {
+            Print("Error creating MA indicator");
+            return(INIT_FAILED);
+        }
+    }
 
     //--- Initialize daily tracking
     ResetDailyCounters();
@@ -94,6 +143,11 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+    //--- Release indicator handles
+    if(rsiHandle != INVALID_HANDLE) IndicatorRelease(rsiHandle);
+    if(atrHandle != INVALID_HANDLE) IndicatorRelease(atrHandle);
+    if(maHandle != INVALID_HANDLE) IndicatorRelease(maHandle);
+
     //--- Remove all UI objects
     ObjectsDeleteAll(0, "HFT_");
     Comment("");
@@ -215,6 +269,12 @@ void CheckForBreakout()
         return; // Not enough volatility
     }
 
+    //--- ATR Filter - ensure market is active enough
+    if(UseATRFilter && !CheckATRFilter())
+    {
+        return;
+    }
+
     //--- Add buffer
     double bufferPoints = BreakoutBuffer * 10 * pointValue;
     double buyLevel = highLevel + bufferPoints;
@@ -223,13 +283,29 @@ void CheckForBreakout()
     //--- Check for bullish breakout
     if(ask > buyLevel)
     {
+        // RSI Filter - avoid overbought
+        if(UseRSIFilter && !CheckRSI(true)) return;
+
+        // Trend confirmation
         if(UseMultiTimeframe && !ConfirmTrend(true)) return;
+
+        // Momentum confirmation
+        if(UseMomentumFilter && !CheckMomentum(true)) return;
+
         OpenPosition(ORDER_TYPE_BUY);
     }
     //--- Check for bearish breakout
     else if(bid < sellLevel)
     {
+        // RSI Filter - avoid oversold
+        if(UseRSIFilter && !CheckRSI(false)) return;
+
+        // Trend confirmation
         if(UseMultiTimeframe && !ConfirmTrend(false)) return;
+
+        // Momentum confirmation
+        if(UseMomentumFilter && !CheckMomentum(false)) return;
+
         OpenPosition(ORDER_TYPE_SELL);
     }
 }
@@ -239,7 +315,9 @@ void CheckForBreakout()
 //+------------------------------------------------------------------+
 bool ConfirmTrend(bool bullish)
 {
-    int maHandle = iMA(_Symbol, PERIOD_M15, 20, 0, MODE_SMA, PRICE_CLOSE);
+    if(!UseMultiTimeframe || maHandle == INVALID_HANDLE)
+        return true;
+
     double ma20[];
     ArraySetAsSeries(ma20, true);
 
@@ -252,6 +330,76 @@ bool ConfirmTrend(bool bullish)
         return price > ma20[0];
     else
         return price < ma20[0];
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI filter                                                  |
+//+------------------------------------------------------------------+
+bool CheckRSI(bool bullish)
+{
+    if(!UseRSIFilter || rsiHandle == INVALID_HANDLE)
+        return true;
+
+    double rsi[];
+    ArraySetAsSeries(rsi, true);
+
+    if(CopyBuffer(rsiHandle, 0, 0, 1, rsi) <= 0)
+        return true;
+
+    if(bullish)
+    {
+        // For buy, RSI should not be overbought
+        return rsi[0] < RSIUpperLevel && rsi[0] > 40;
+    }
+    else
+    {
+        // For sell, RSI should not be oversold
+        return rsi[0] > RSILowerLevel && rsi[0] < 60;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check ATR filter                                                  |
+//+------------------------------------------------------------------+
+bool CheckATRFilter()
+{
+    if(!UseATRFilter || atrHandle == INVALID_HANDLE)
+        return true;
+
+    double atr[];
+    ArraySetAsSeries(atr, true);
+
+    if(CopyBuffer(atrHandle, 0, 0, 2, atr) <= 0)
+        return true;
+
+    // Check if current ATR is above average (market is moving)
+    double avgATR = (atr[0] + atr[1]) / 2.0;
+    double atrInPips = atr[0] / pointValue / 10.0;
+
+    return atrInPips > MinVolatilityPips * ATRMultiplier;
+}
+
+//+------------------------------------------------------------------+
+//| Check momentum filter                                             |
+//+------------------------------------------------------------------+
+bool CheckMomentum(bool bullish)
+{
+    if(!UseMomentumFilter)
+        return true;
+
+    // Check recent price momentum
+    double close[];
+    ArraySetAsSeries(close, true);
+
+    if(CopyClose(_Symbol, PERIOD_M5, 0, MomentumPeriod + 1, close) <= 0)
+        return true;
+
+    double currentMomentum = close[0] - close[MomentumPeriod];
+
+    if(bullish)
+        return currentMomentum > 0; // Positive momentum for buy
+    else
+        return currentMomentum < 0; // Negative momentum for sell
 }
 
 //+------------------------------------------------------------------+
@@ -363,6 +511,8 @@ void ManagePositions()
                               SymbolInfoDouble(_Symbol, SYMBOL_ASK);
         double sl = PositionGetDouble(POSITION_SL);
         double tp = PositionGetDouble(POSITION_TP);
+        datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+        double volume = PositionGetDouble(POSITION_VOLUME);
 
         //--- Calculate profit in pips
         double profitPips = 0;
@@ -371,12 +521,58 @@ void ManagePositions()
         else
             profitPips = (openPrice - currentPrice) / pointValue / 10.0;
 
+        //--- Time-based exit for losing trades
+        if(UseTimeBasedExit && profitPips < 0)
+        {
+            int minutesInTrade = (int)((TimeCurrent() - openTime) / 60);
+            if(minutesInTrade >= MaxTradeMinutes)
+            {
+                trade.PositionClose(ticket);
+                Print("⏱️ Position closed by time: Ticket #", ticket, " | Minutes: ", minutesInTrade);
+                continue;
+            }
+        }
+
+        //--- Partial profit taking
+        if(profitPips >= PartialProfitPips && volume > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+        {
+            double closeVolume = NormalizeDouble(volume * PartialProfitPercent / 100.0, 2);
+            double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+            if(closeVolume >= minLot && (volume - closeVolume) >= minLot)
+            {
+                if(trade.PositionClosePartial(ticket, closeVolume))
+                {
+                    Print("💰 Partial profit taken: Ticket #", ticket,
+                          " | Closed: ", closeVolume,
+                          " | Profit: ", profitPips, " pips");
+                }
+            }
+        }
+
         //--- Move to breakeven
         if(profitPips >= BreakevenPips && sl != openPrice)
         {
-            if(trade.PositionModify(ticket, openPrice, tp))
+            double newSL = openPrice;
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
             {
-                Print("📊 Position moved to breakeven: Ticket #", ticket);
+                if(sl < newSL || sl == 0)
+                {
+                    if(trade.PositionModify(ticket, newSL, tp))
+                    {
+                        Print("📊 Position moved to breakeven: Ticket #", ticket);
+                    }
+                }
+            }
+            else
+            {
+                if(sl > newSL || sl == 0)
+                {
+                    if(trade.PositionModify(ticket, newSL, tp))
+                    {
+                        Print("📊 Position moved to breakeven: Ticket #", ticket);
+                    }
+                }
             }
         }
 
@@ -390,7 +586,7 @@ void ManagePositions()
                 newSL = currentPrice - TrailingStepPips * 10 * pointValue;
                 newSL = NormalizeDouble(newSL, _Digits);
 
-                if(newSL > sl)
+                if(newSL > sl && newSL > openPrice)
                 {
                     if(trade.PositionModify(ticket, newSL, tp))
                     {
@@ -403,7 +599,7 @@ void ManagePositions()
                 newSL = currentPrice + TrailingStepPips * 10 * pointValue;
                 newSL = NormalizeDouble(newSL, _Digits);
 
-                if(newSL < sl || sl == 0)
+                if((newSL < sl || sl == 0) && newSL < openPrice)
                 {
                     if(trade.PositionModify(ticket, newSL, tp))
                     {
