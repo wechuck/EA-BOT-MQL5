@@ -17,7 +17,10 @@ input int      MaxDailyTrades = 25;             // Maximum Trades Per Day
 input bool     LockProfitsDaily = true;         // Lock Profits at Daily Target
 
 input group "=== Trading Parameters ==="
-input double   FixedLotSize = 0.01;             // Fixed Lot Size
+input bool     UseDynamicLotSize = true;        // Use Dynamic Lot Sizing
+input double   FixedLotSize = 0.01;             // Fixed Lot Size (if not dynamic)
+input double   RiskPercentPerTrade = 2.0;       // Risk Per Trade (% of balance)
+input double   MaxLotSize = 0.1;                // Maximum Lot Size
 input int      StopLossPips = 150;              // Stop Loss (pips)
 input int      TakeProfitPips = 500;            // Take Profit (pips)
 input int      BreakevenPips = 50;              // Move to Breakeven at (pips)
@@ -236,13 +239,62 @@ void CheckForBreakout()
 //+------------------------------------------------------------------+
 bool ConfirmTrend(bool bullish)
 {
-    double ma20 = iMA(_Symbol, PERIOD_M15, 20, 0, MODE_SMA, PRICE_CLOSE, 0);
+    int maHandle = iMA(_Symbol, PERIOD_M15, 20, 0, MODE_SMA, PRICE_CLOSE);
+    double ma20[];
+    ArraySetAsSeries(ma20, true);
+
+    if(CopyBuffer(maHandle, 0, 0, 1, ma20) <= 0)
+        return false;
+
     double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
     if(bullish)
-        return price > ma20;
+        return price > ma20[0];
     else
-        return price < ma20;
+        return price < ma20[0];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate dynamic lot size based on account balance               |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+    if(!UseDynamicLotSize)
+        return FixedLotSize;
+
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double riskAmount = balance * (RiskPercentPerTrade / 100.0);
+
+    // Calculate pip value for the symbol
+    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double pipValue = (tickValue / tickSize) * 10 * pointValue;
+
+    if(pipValue == 0)
+        return FixedLotSize;
+
+    // Calculate lot size based on risk
+    double lotSize = riskAmount / (StopLossPips * pipValue);
+
+    // Apply lot size constraints
+    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+    // Ensure we don't exceed MaxLotSize parameter
+    if(lotSize > MaxLotSize)
+        lotSize = MaxLotSize;
+
+    // Normalize to lot step
+    lotSize = MathFloor(lotSize / lotStep) * lotStep;
+
+    // Ensure within broker limits
+    if(lotSize < minLot)
+        lotSize = minLot;
+    if(lotSize > maxLot)
+        lotSize = maxLot;
+
+    return NormalizeDouble(lotSize, 2);
 }
 
 //+------------------------------------------------------------------+
@@ -252,6 +304,9 @@ void OpenPosition(ENUM_ORDER_TYPE orderType)
 {
     //--- Validate
     if(CountOpenPositions() >= MaxConcurrentPositions) return;
+
+    //--- Calculate dynamic lot size
+    double lotSize = CalculateLotSize();
 
     double price = (orderType == ORDER_TYPE_BUY) ?
                    SymbolInfoDouble(_Symbol, SYMBOL_ASK) :
@@ -276,10 +331,11 @@ void OpenPosition(ENUM_ORDER_TYPE orderType)
     tp = NormalizeDouble(tp, _Digits);
 
     //--- Open position
-    if(trade.PositionOpen(_Symbol, orderType, FixedLotSize, price, sl, tp, "HFT Breakout"))
+    if(trade.PositionOpen(_Symbol, orderType, lotSize, price, sl, tp, "HFT Breakout"))
     {
         dailyTradeCount++;
         Print("✅ Position opened: ", EnumToString(orderType),
+              " | Lot: ", DoubleToString(lotSize, 2),
               " | Price: ", price,
               " | SL: ", sl,
               " | TP: ", tp);
@@ -490,6 +546,8 @@ void CreateDashboard()
     CreateLabel("HFT_DailyTarget", x, y, "Daily Target:", ColorInfo, 9);
     y += lineHeight + 5;
 
+    CreateLabel("HFT_LotSize", x, y, "Lot Size:", ColorInfo, 9);
+    y += lineHeight;
     CreateLabel("HFT_Trades", x, y, "Trades Today:", ColorInfo, 9);
     y += lineHeight;
     CreateLabel("HFT_Positions", x, y, "Open Positions:", ColorInfo, 9);
@@ -509,6 +567,7 @@ void UpdateDashboard()
     double equity = AccountInfoDouble(ACCOUNT_EQUITY);
     double spread = GetSpreadInPips();
     int positions = CountOpenPositions();
+    double currentLotSize = CalculateLotSize();
 
     color profitColor = dailyProfit >= 0 ? ColorProfit : ColorLoss;
 
@@ -522,6 +581,13 @@ void UpdateDashboard()
     ObjectSetString(0, "HFT_DailyTarget", OBJPROP_TEXT,
                     "Daily Target: $" + DoubleToString(DailyProfitTarget, 2) +
                     " (" + DoubleToString((dailyProfit/DailyProfitTarget)*100, 0) + "%)");
+
+    string lotSizeText = "Lot Size: " + DoubleToString(currentLotSize, 2);
+    if(UseDynamicLotSize)
+        lotSizeText += " (Dynamic)";
+    else
+        lotSizeText += " (Fixed)";
+    ObjectSetString(0, "HFT_LotSize", OBJPROP_TEXT, lotSizeText);
 
     ObjectSetString(0, "HFT_Trades", OBJPROP_TEXT,
                     "Trades Today: " + IntegerToString(dailyTradeCount) + "/" + IntegerToString(MaxDailyTrades));
