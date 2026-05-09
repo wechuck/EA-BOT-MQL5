@@ -10,6 +10,9 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
+input group "=== EA Mode ==="
+input bool     AutoTradeEnabled = false;        // Enable Auto Trading (false = Management Only)
+
 input group "=== Challenge Settings ==="
 input double   StartingBalance = 5.0;           // Starting Account Balance ($)
 input double   DailyProfitTarget = 10.0;        // Daily Profit Target ($)
@@ -156,9 +159,23 @@ int OnInit()
     //--- Create UI
     CreateDashboard();
 
+    Print("========================================");
     Print("Gold HFT Breakout Challenge EA Initialized");
+    Print("========================================");
+    if(AutoTradeEnabled)
+    {
+        Print("⚙️ MODE: AUTO TRADING ENABLED");
+        Print("   EA will open and manage trades automatically");
+    }
+    else
+    {
+        Print("⚙️ MODE: TRADE MANAGEMENT ONLY");
+        Print("   EA will NOT open trades - you must open manually");
+        Print("   EA will manage: Breakeven, Trailing, Partial Profits, Time Exit");
+    }
     Print("Starting Balance: $", StartingBalance);
     Print("Daily Target: $", DailyProfitTarget);
+    Print("========================================");
 
     return(INIT_SUCCEEDED);
 }
@@ -209,7 +226,7 @@ void OnTick()
         }
     }
 
-    //--- Manage existing positions
+    //--- ALWAYS manage existing positions (this is the main purpose now)
     ManagePositions();
 
     //--- Update UI
@@ -220,13 +237,17 @@ void OnTick()
         lastUIUpdate = TimeCurrent();
     }
 
-    //--- Check if we should trade
-    if(!ShouldTrade()) return;
-
-    //--- Look for trading opportunities on new bar
-    if(isNewBar)
+    //--- AUTO TRADING (only if enabled - disabled by default)
+    if(AutoTradeEnabled)
     {
-        CheckForBreakout();
+        //--- Check if we should trade
+        if(!ShouldTrade()) return;
+
+        //--- Look for trading opportunities on new bar
+        if(isNewBar)
+        {
+            CheckForBreakout();
+        }
     }
 }
 
@@ -1036,6 +1057,9 @@ void CreateDashboard()
     CreateLabel("HFT_Title", x, y, "=== GOLD HFT BREAKOUT CHALLENGE ===", clrYellow, 10, "Arial Bold");
     y += lineHeight + 5;
 
+    CreateLabel("HFT_Mode", x, y, "Mode:", ColorInfo, 9);
+    y += lineHeight + 5;
+
     CreateLabel("HFT_Balance", x, y, "Balance:", ColorInfo, 9);
     y += lineHeight;
     CreateLabel("HFT_Equity", x, y, "Equity:", ColorInfo, 9);
@@ -1070,6 +1094,12 @@ void UpdateDashboard()
 
     color profitColor = dailyProfit >= 0 ? ColorProfit : ColorLoss;
 
+    // Show EA mode
+    string modeText = AutoTradeEnabled ? "Mode: AUTO TRADING" : "Mode: MANAGEMENT ONLY";
+    color modeColor = AutoTradeEnabled ? clrLime : clrOrange;
+    ObjectSetString(0, "HFT_Mode", OBJPROP_TEXT, modeText);
+    ObjectSetInteger(0, "HFT_Mode", OBJPROP_COLOR, modeColor);
+
     ObjectSetString(0, "HFT_Balance", OBJPROP_TEXT, "Balance: $" + DoubleToString(balance, 2));
     ObjectSetString(0, "HFT_Equity", OBJPROP_TEXT, "Equity: $" + DoubleToString(equity, 2));
     ObjectSetString(0, "HFT_DailyProfit", OBJPROP_TEXT,
@@ -1095,7 +1125,7 @@ void UpdateDashboard()
     ObjectSetString(0, "HFT_Spread", OBJPROP_TEXT,
                     "Spread: " + DoubleToString(spread, 1) + " pips");
 
-    string status = "🟢 ACTIVE";
+    string status = AutoTradeEnabled ? "🟢 ACTIVE" : "🔧 MANAGING";
     color statusColor = ColorProfit;
 
     if(dailyLossLimitReached)
