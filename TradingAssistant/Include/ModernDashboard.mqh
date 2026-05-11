@@ -71,6 +71,13 @@ public:
    void UpdateExecutionPanel(double spread, int spread_status, string exec_quality);
    void UpdateStatsPanel(int signals_today, int signals_week, double win_rate, double total_profit);
 
+   // NEW PANELS - Enhanced features
+   void UpdateSignalHistoryPanel(string recent_signals[]);
+   void UpdateMarketAnalysisPanel(string trend, string volatility, double support, double resistance, double atr);
+   void UpdatePerformancePanel(double total_profit, double win_rate, double profit_factor, int total_trades);
+   void UpdateFilterStatusPanel(string active_filters, bool trading_allowed, string block_reason);
+   void UpdateRiskLimitsPanel(double daily_pnl, double weekly_pnl, int trades_today, int consecutive_losses);
+
    // Overloaded with signal direction
    void UpdateSignalPanel(string signal_status, int signal_strength, string next_signal, double recommended_lot, string signal_direction);
 
@@ -810,5 +817,154 @@ void CModernDashboard::ClearChartLines()
    ObjectDelete(0, m_prefix + "TPLine");
    ObjectDelete(0, m_prefix + "SignalArrow");
    ObjectDelete(0, m_prefix + "SignalText");
+}
+
+//+------------------------------------------------------------------+
+//| Update Market Analysis Panel                                     |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateMarketAnalysisPanel(string trend, string volatility, double support, double resistance, double atr)
+{
+   int panel_y = m_y_pos + 540;
+
+   // Trend
+   color trend_color = (trend == "BULLISH") ? DASHBOARD_SUCCESS_COLOR :
+                       (trend == "BEARISH") ? DASHBOARD_DANGER_COLOR : DASHBOARD_WARNING_COLOR;
+   DrawLabel(m_prefix + "TrendLabel", m_x_pos + 27, panel_y + 32, "Trend:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "TrendValue", m_x_pos + 80, panel_y + 30, trend, trend_color, 10, "Segoe UI Semibold");
+
+   // Volatility
+   color vol_color = (volatility == "HIGH") ? DASHBOARD_DANGER_COLOR :
+                     (volatility == "LOW") ? DASHBOARD_INFO_COLOR : DASHBOARD_WARNING_COLOR;
+   DrawLabel(m_prefix + "VolLabel", m_x_pos + 200, panel_y + 32, "Volatility:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "VolValue", m_x_pos + 270, panel_y + 30, volatility, vol_color, 10, "Segoe UI Semibold");
+
+   // Support/Resistance
+   DrawLabel(m_prefix + "SRLabel", m_x_pos + 27, panel_y + 58, "Support:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "SupportValue", m_x_pos + 85, panel_y + 58, DoubleToString(support, _Digits), DASHBOARD_INFO_COLOR, 8);
+
+   DrawLabel(m_prefix + "ResLabel", m_x_pos + 200, panel_y + 58, "Resistance:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "ResValue", m_x_pos + 270, panel_y + 58, DoubleToString(resistance, _Digits), DASHBOARD_INFO_COLOR, 8);
+
+   // ATR
+   DrawLabel(m_prefix + "ATRLabel", m_x_pos + 27, panel_y + 78, "ATR:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "ATRValue", m_x_pos + 60, panel_y + 78, DoubleToString(atr, _Digits), DASHBOARD_TEXT_COLOR, 8);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update Performance Panel                                          |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdatePerformancePanel(double total_profit, double win_rate, double profit_factor, int total_trades)
+{
+   int panel_y = m_y_pos + 440;
+
+   // Total Profit
+   color profit_color = (total_profit > 0) ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+   DrawLabel(m_prefix + "ProfitLabel", m_x_pos + 27, panel_y + 32, "Total Profit:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "ProfitValue", m_x_pos + 110, panel_y + 30, "$" + DoubleToString(total_profit, 2), profit_color, 11, "Segoe UI Bold");
+
+   // Win Rate
+   color wr_color = (win_rate >= 60) ? DASHBOARD_SUCCESS_COLOR :
+                    (win_rate >= 45) ? DASHBOARD_WARNING_COLOR : DASHBOARD_DANGER_COLOR;
+   DrawLabel(m_prefix + "WRLabel", m_x_pos + 240, panel_y + 32, "Win Rate:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "WRValue", m_x_pos + 310, panel_y + 30, DoubleToString(win_rate, 1) + "%", wr_color, 11, "Segoe UI Bold");
+
+   // Profit Factor
+   color pf_color = (profit_factor >= 2.0) ? DASHBOARD_SUCCESS_COLOR :
+                    (profit_factor >= 1.5) ? DASHBOARD_WARNING_COLOR : DASHBOARD_DANGER_COLOR;
+   DrawLabel(m_prefix + "PFLabel", m_x_pos + 27, panel_y + 58, "Profit Factor:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "PFValue", m_x_pos + 120, panel_y + 58, DoubleToString(profit_factor, 2), pf_color, 9);
+
+   // Total Trades
+   DrawLabel(m_prefix + "TTLabel", m_x_pos + 240, panel_y + 58, "Total Trades:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "TTValue", m_x_pos + 330, panel_y + 58, IntegerToString(total_trades), DASHBOARD_TEXT_COLOR, 9);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update Filter Status Panel                                       |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateFilterStatusPanel(string active_filters, bool trading_allowed, string block_reason)
+{
+   int panel_y = m_y_pos + 340;
+
+   // Active Filters
+   DrawLabel(m_prefix + "FiltersLabel", m_x_pos + 27, panel_y + 32, "Active Filters:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "FiltersValue", m_x_pos + 120, panel_y + 30, active_filters, DASHBOARD_INFO_COLOR, 9);
+
+   // Trading Status
+   color status_color = trading_allowed ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+   string status_text = trading_allowed ? "ALLOWED" : "BLOCKED";
+   DrawLabel(m_prefix + "TradingStatusLabel", m_x_pos + 27, panel_y + 58, "Trading:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "TradingStatusValue", m_x_pos + 90, panel_y + 56, status_text, status_color, 11, "Segoe UI Bold");
+
+   // Block Reason (if applicable)
+   if(!trading_allowed && block_reason != "")
+   {
+      DrawLabel(m_prefix + "BlockReasonLabel", m_x_pos + 27, panel_y + 78, "Reason:", DASHBOARD_TEXT_MUTED, 8);
+      DrawLabel(m_prefix + "BlockReasonValue", m_x_pos + 80, panel_y + 78, block_reason, DASHBOARD_WARNING_COLOR, 8);
+   }
+   else
+   {
+      DeleteObject(m_prefix + "BlockReasonLabel");
+      DeleteObject(m_prefix + "BlockReasonValue");
+   }
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update Risk Limits Panel                                         |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateRiskLimitsPanel(double daily_pnl, double weekly_pnl, int trades_today, int consecutive_losses)
+{
+   int panel_y = m_y_pos + 640;
+
+   // Daily P&L
+   color daily_color = (daily_pnl > 0) ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+   DrawLabel(m_prefix + "DailyPnLLabel", m_x_pos + 27, panel_y + 32, "Daily P&L:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "DailyPnLValue", m_x_pos + 100, panel_y + 30, "$" + DoubleToString(daily_pnl, 2), daily_color, 10);
+
+   // Weekly P&L
+   color weekly_color = (weekly_pnl > 0) ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+   DrawLabel(m_prefix + "WeeklyPnLLabel", m_x_pos + 230, panel_y + 32, "Weekly P&L:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "WeeklyPnLValue", m_x_pos + 310, panel_y + 30, "$" + DoubleToString(weekly_pnl, 2), weekly_color, 10);
+
+   // Trades Today
+   DrawLabel(m_prefix + "TradesTodayLabel", m_x_pos + 27, panel_y + 58, "Trades Today:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "TradesTodayValue", m_x_pos + 120, panel_y + 58, IntegerToString(trades_today), DASHBOARD_TEXT_COLOR, 9);
+
+   // Consecutive Losses
+   color cl_color = (consecutive_losses >= 3) ? DASHBOARD_DANGER_COLOR : DASHBOARD_TEXT_COLOR;
+   DrawLabel(m_prefix + "ConsecLossLabel", m_x_pos + 230, panel_y + 58, "Consec. Losses:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "ConsecLossValue", m_x_pos + 350, panel_y + 58, IntegerToString(consecutive_losses), cl_color, 9);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update Signal History Panel                                      |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateSignalHistoryPanel(string recent_signals[])
+{
+   int panel_y = m_y_pos + 740;
+   int array_size = ArraySize(recent_signals);
+
+   // Display last 5 signals
+   for(int i = 0; i < MathMin(5, array_size); i++)
+   {
+      string obj_name = m_prefix + "History_" + IntegerToString(i);
+      DrawLabel(obj_name, m_x_pos + 27, panel_y + 32 + (i * 20), recent_signals[i], DASHBOARD_TEXT_MUTED, 7);
+   }
+
+   // Clear unused slots
+   for(int i = array_size; i < 5; i++)
+   {
+      DeleteObject(m_prefix + "History_" + IntegerToString(i));
+   }
+
+   ChartRedraw();
 }
 //+------------------------------------------------------------------+
