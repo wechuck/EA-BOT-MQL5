@@ -264,6 +264,12 @@ void OnNewBar()
 
    if(signal_found)
    {
+      // Clear previous chart lines before drawing new ones
+      if(Dashboard != NULL)
+      {
+         Dashboard.ClearChartLines();
+      }
+
       string signal_type = SignalDetector.GetSignalType();
       int signal_strength = SignalDetector.GetSignalStrength();
 
@@ -303,6 +309,30 @@ void OnNewBar()
       {
          Dashboard.ShowEntryPopup(signal_type, g_recommended_lot);
       }
+
+      // Draw SL/TP lines and signal arrow on chart
+      if(Dashboard != NULL)
+      {
+         // Calculate entry, SL, and TP prices for visual display
+         bool is_buy = (signal_type == "BUY");
+         double current_price = SymbolInfoDouble(_Symbol, is_buy ? SYMBOL_ASK : SYMBOL_BID);
+         double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+         // Using fixed distances (200 for SL, 900 for TP as per user request)
+         double sl_price = is_buy ?
+            current_price - (InpFixedSLDistance * point) :
+            current_price + (InpFixedSLDistance * point);
+
+         double tp_price = is_buy ?
+            current_price + (InpFixedTPDistance * point) :
+            current_price - (InpFixedTPDistance * point);
+
+         // Draw visual lines on chart (Entry, SL, TP)
+         Dashboard.DrawSLTPLines(signal_type, current_price, sl_price, tp_price);
+
+         // Draw signal arrow and direction text
+         Dashboard.DrawSignalArrow(signal_type, current_price);
+      }
    }
 }
 
@@ -322,6 +352,10 @@ void UpdateDashboard()
    if(SignalDetector.IsSignalActive())
    {
       signal_status = "ACTIVE";
+   }
+   else if(signal_strength >= 70)
+   {
+      signal_status = "ACTIVE"; // High strength should also show ACTIVE
    }
    else if(signal_strength >= 50)
    {

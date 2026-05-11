@@ -76,6 +76,11 @@ public:
    void HideEntryPopup();
    void UpdateEntryPopup();
 
+   // Chart visual helpers
+   void DrawSLTPLines(string signal_type, double entry_price, double sl_price, double tp_price);
+   void DrawSignalArrow(string signal_type, double price);
+   void ClearChartLines();
+
 private:
    // Drawing helpers
    void DrawPanel(string name, int x, int y, int width, int height, color bg_color, color border_color);
@@ -636,5 +641,99 @@ void CModernDashboard::UpdateEntryPopup()
    {
       HideEntryPopup();
    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw SL and TP lines on chart                                   |
+//+------------------------------------------------------------------+
+void CModernDashboard::DrawSLTPLines(string signal_type, double entry_price, double sl_price, double tp_price)
+{
+   // Clear previous lines first
+   ClearChartLines();
+
+   datetime current_time = TimeCurrent();
+   datetime future_time = current_time + 3600 * 4; // 4 hours ahead
+
+   // Determine if BUY or SELL
+   bool is_buy = (StringFind(signal_type, "BUY") >= 0);
+
+   // Entry line (blue dashed)
+   ObjectCreate(0, m_prefix + "EntryLine", OBJ_TREND, 0, current_time, entry_price, future_time, entry_price);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_COLOR, DASHBOARD_INFO_COLOR);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_STYLE, STYLE_DASH);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, m_prefix + "EntryLine", OBJPROP_BACK, false);
+   ObjectSetString(0, m_prefix + "EntryLine", OBJPROP_TEXT, "ENTRY: " + DoubleToString(entry_price, _Digits));
+
+   // Stop Loss line (red solid)
+   ObjectCreate(0, m_prefix + "SLLine", OBJ_TREND, 0, current_time, sl_price, future_time, sl_price);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_COLOR, DASHBOARD_DANGER_COLOR);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, m_prefix + "SLLine", OBJPROP_BACK, false);
+   ObjectSetString(0, m_prefix + "SLLine", OBJPROP_TEXT, "SL: " + DoubleToString(sl_price, _Digits));
+
+   // Take Profit line (green solid)
+   ObjectCreate(0, m_prefix + "TPLine", OBJ_TREND, 0, current_time, tp_price, future_time, tp_price);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_COLOR, DASHBOARD_SUCCESS_COLOR);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, m_prefix + "TPLine", OBJPROP_BACK, false);
+   ObjectSetString(0, m_prefix + "TPLine", OBJPROP_TEXT, "TP: " + DoubleToString(tp_price, _Digits));
+
+   // Draw signal arrow at entry point
+   DrawSignalArrow(signal_type, entry_price);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Draw signal arrow on chart                                      |
+//+------------------------------------------------------------------+
+void CModernDashboard::DrawSignalArrow(string signal_type, double price)
+{
+   datetime current_time = TimeCurrent();
+   bool is_buy = (StringFind(signal_type, "BUY") >= 0);
+
+   // Create arrow object
+   int arrow_code = is_buy ? 233 : 234; // Up arrow for BUY, Down arrow for SELL
+   color arrow_color = is_buy ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+
+   ObjectCreate(0, m_prefix + "SignalArrow", OBJ_ARROW, 0, current_time, price);
+   ObjectSetInteger(0, m_prefix + "SignalArrow", OBJPROP_COLOR, arrow_color);
+   ObjectSetInteger(0, m_prefix + "SignalArrow", OBJPROP_ARROWCODE, arrow_code);
+   ObjectSetInteger(0, m_prefix + "SignalArrow", OBJPROP_WIDTH, 5);
+   ObjectSetInteger(0, m_prefix + "SignalArrow", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, m_prefix + "SignalArrow", OBJPROP_BACK, false);
+
+   // Add text label showing direction
+   string direction = is_buy ? "▲ BUY" : "▼ SELL";
+   ObjectCreate(0, m_prefix + "SignalText", OBJ_TEXT, 0, current_time, price);
+   ObjectSetString(0, m_prefix + "SignalText", OBJPROP_TEXT, direction);
+   ObjectSetInteger(0, m_prefix + "SignalText", OBJPROP_COLOR, arrow_color);
+   ObjectSetInteger(0, m_prefix + "SignalText", OBJPROP_FONTSIZE, 12);
+   ObjectSetString(0, m_prefix + "SignalText", OBJPROP_FONT, "Arial Black");
+   ObjectSetInteger(0, m_prefix + "SignalText", OBJPROP_ANCHOR, is_buy ? ANCHOR_TOP : ANCHOR_BOTTOM);
+   ObjectSetInteger(0, m_prefix + "SignalText", OBJPROP_SELECTABLE, false);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Clear all chart lines and arrows                                |
+//+------------------------------------------------------------------+
+void CModernDashboard::ClearChartLines()
+{
+   ObjectDelete(0, m_prefix + "EntryLine");
+   ObjectDelete(0, m_prefix + "SLLine");
+   ObjectDelete(0, m_prefix + "TPLine");
+   ObjectDelete(0, m_prefix + "SignalArrow");
+   ObjectDelete(0, m_prefix + "SignalText");
 }
 //+------------------------------------------------------------------+
