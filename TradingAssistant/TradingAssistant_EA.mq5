@@ -372,8 +372,15 @@ void UpdateDashboard()
 
    string next_signal = SignalDetector.GetNextSignalTime();
 
-   // Use overloaded version with lot size
-   Dashboard.UpdateSignalPanel(signal_status, signal_strength, next_signal, g_recommended_lot);
+   // Get current signal direction (BUY/SELL) to display on dashboard
+   string signal_direction = "NONE";
+   if(SignalDetector.IsSignalActive() || signal_strength >= 70)
+   {
+      signal_direction = SignalDetector.GetSignalType();
+   }
+
+   // Use overloaded version with lot size and signal direction
+   Dashboard.UpdateSignalPanel(signal_status, signal_strength, next_signal, g_recommended_lot, signal_direction);
 
    // Trade Management Panel
    bool has_position = TradeManager.HasActivePosition();

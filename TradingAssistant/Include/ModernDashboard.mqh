@@ -71,6 +71,9 @@ public:
    void UpdateExecutionPanel(double spread, int spread_status, string exec_quality);
    void UpdateStatsPanel(int signals_today, int signals_week, double win_rate, double total_profit);
 
+   // Overloaded with signal direction
+   void UpdateSignalPanel(string signal_status, int signal_strength, string next_signal, double recommended_lot, string signal_direction);
+
    // Entry popup alert
    void ShowEntryPopup(string signal_type, double lot_size);
    void HideEntryPopup();
@@ -542,6 +545,78 @@ void CModernDashboard::UpdateSignalPanel(string signal_status, int signal_streng
       status_color = DASHBOARD_TEXT_MUTED;
 
    DrawLabel(m_prefix + "SignalStatus", m_x_pos + 55, panel_y + 32, signal_status, status_color, 11, "Segoe UI Semibold");
+
+   // Signal strength bar
+   DrawLabel(m_prefix + "SignalStrengthLabel", m_x_pos + 27, panel_y + 58, "Signal Strength:", DASHBOARD_TEXT_MUTED, 8);
+   DrawProgressBar(m_prefix + "SignalStrengthBar", m_x_pos + 27, panel_y + 75, m_width - 84, 15, signal_strength,
+                   signal_strength >= 80 ? DASHBOARD_SUCCESS_COLOR :
+                   signal_strength >= 50 ? DASHBOARD_WARNING_COLOR : DASHBOARD_DANGER_COLOR);
+   DrawLabel(m_prefix + "SignalStrengthValue", m_x_pos + m_width - 55, panel_y + 73, IntegerToString(signal_strength) + "%", DASHBOARD_TEXT_COLOR, 9);
+
+   // Next signal countdown
+   DrawLabel(m_prefix + "NextSignalLabel", m_x_pos + 27, panel_y + 100, "Next Signal:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "NextSignalValue", m_x_pos + 100, panel_y + 100, next_signal, DASHBOARD_INFO_COLOR, 8);
+
+   // Recommended lot size (prominent display)
+   if(signal_status == "ACTIVE" && recommended_lot > 0)
+   {
+      DrawLabel(m_prefix + "RecommendedLotLabel", m_x_pos + 220, panel_y + 100, "USE LOT:", DASHBOARD_TEXT_MUTED, 8);
+      DrawLabel(m_prefix + "RecommendedLotValue", m_x_pos + 280, panel_y + 98, DoubleToString(recommended_lot, 2),
+                DASHBOARD_ACCENT_COLOR, 12, "Segoe UI Bold");
+   }
+   else
+   {
+      DeleteObject(m_prefix + "RecommendedLotLabel");
+      DeleteObject(m_prefix + "RecommendedLotValue");
+   }
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Overloaded UpdateSignalPanel with signal direction              |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateSignalPanel(string signal_status, int signal_strength, string next_signal, double recommended_lot, string signal_direction)
+{
+   int panel_y = m_y_pos + 70;
+
+   // Status indicator with more states
+   int status_level = 0;
+   if(signal_status == "ACTIVE")
+      status_level = 2;       // Green - signal active
+   else if(signal_status == "SCANNING")
+      status_level = 1;       // Yellow - analyzing potential signal
+   else if(signal_status == "WATCHING")
+      status_level = 1;       // Yellow - watching market
+   else
+      status_level = 0;       // Red/Gray - idle
+
+   DrawStatusIndicator(m_prefix + "SignalIndicator", m_x_pos + 27, panel_y + 35, status_level);
+
+   // Signal status text with color
+   color status_color = DASHBOARD_TEXT_MUTED;
+   if(signal_status == "ACTIVE")
+      status_color = DASHBOARD_SUCCESS_COLOR;
+   else if(signal_status == "SCANNING")
+      status_color = DASHBOARD_WARNING_COLOR;
+   else if(signal_status == "WATCHING")
+      status_color = DASHBOARD_INFO_COLOR;
+   else // IDLE
+      status_color = DASHBOARD_TEXT_MUTED;
+
+   DrawLabel(m_prefix + "SignalStatus", m_x_pos + 55, panel_y + 32, signal_status, status_color, 11, "Segoe UI Semibold");
+
+   // Signal direction (BUY/SELL) - prominently displayed
+   if(signal_direction != "" && signal_direction != "NONE")
+   {
+      color dir_color = (StringFind(signal_direction, "BUY") >= 0) ? DASHBOARD_SUCCESS_COLOR : DASHBOARD_DANGER_COLOR;
+      string dir_icon = (StringFind(signal_direction, "BUY") >= 0) ? "▲ " : "▼ ";
+      DrawLabel(m_prefix + "SignalDirection", m_x_pos + 160, panel_y + 30, dir_icon + signal_direction, dir_color, 14, "Segoe UI Bold");
+   }
+   else
+   {
+      DeleteObject(m_prefix + "SignalDirection");
+   }
 
    // Signal strength bar
    DrawLabel(m_prefix + "SignalStrengthLabel", m_x_pos + 27, panel_y + 58, "Signal Strength:", DASHBOARD_TEXT_MUTED, 8);
