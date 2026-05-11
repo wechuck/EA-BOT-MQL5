@@ -20,6 +20,15 @@
 #include "Include/PositionSizing.mqh"
 #include "Include/AlertSystem.mqh"
 
+// NEW ENHANCED MODULES
+#include "Include/SignalHistory.mqh"
+#include "Include/AdvancedFilters.mqh"
+#include "Include/RiskManager.mqh"
+#include "Include/PerformanceTracker.mqh"
+#include "Include/PartialPositionManager.mqh"
+#include "Include/MarketAnalysis.mqh"
+#include "Include/EnhancedAlertSystem.mqh"
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
@@ -81,15 +90,67 @@ input ENUM_TIMEFRAMES    InpTimeframe = PERIOD_M15;            // Analysis Timef
 input bool               InpShowEntryPopup = true;             // Show Entry Popup Alert
 input bool               InpBlockFridayLate = true;            // Block Trading Friday after 22:00
 
+//--- Advanced Filters
+input group "=== Advanced Filters ==="
+input bool               InpUseVolumeFilter = false;           // Use Volume Filter
+input double             InpVolumeMultiplier = 1.5;            // Volume Multiplier
+input bool               InpUseMultiTFFilter = false;          // Use Multi-Timeframe Confirmation
+input ENUM_TIMEFRAMES    InpHigherTimeframe = PERIOD_H1;       // Higher Timeframe for Confirmation
+input bool               InpUseSpreadFilter = true;            // Use Spread Filter (Recommended)
+input double             InpMaxSpreadPips = 3.0;               // Max Spread (Pips)
+input bool               InpUseSessionFilter = false;          // Use Trading Session Filter
+input int                InpSessionStartHour = 8;              // Session Start Hour (GMT)
+input int                InpSessionEndHour = 17;               // Session End Hour (GMT)
+
+//--- Risk Management
+input group "=== Risk Management Limits ==="
+input bool               InpUseDailyLossLimit = true;          // Use Daily Loss Limit
+input double             InpDailyLossLimitPct = 2.0;           // Daily Loss Limit (%)
+input bool               InpUseDailyProfitTarget = false;      // Use Daily Profit Target
+input double             InpDailyProfitTargetPct = 5.0;        // Daily Profit Target (%)
+input bool               InpUseMaxTradesLimit = true;          // Use Max Trades Per Day Limit
+input int                InpMaxTradesPerDay = 5;               // Max Trades Per Day
+input bool               InpUseDrawdownLimit = true;           // Use Drawdown Limit
+input double             InpMaxDrawdownPct = 10.0;             // Max Drawdown (%)
+input bool               InpUseConsecLossLimit = true;         // Use Consecutive Loss Limit
+input int                InpMaxConsecutiveLosses = 3;          // Max Consecutive Losses
+
+//--- Partial Position Management
+input group "=== Partial Position Management ==="
+input bool               InpUsePartialClose = false;           // Use Partial Position Close
+input double             InpTP1_RR = 2.0;                      // TP1 Risk:Reward Ratio
+input double             InpTP1_ClosePct = 50.0;               // TP1 Close Percent
+input double             InpTP2_RR = 3.0;                      // TP2 Risk:Reward Ratio
+input double             InpTP2_ClosePct = 30.0;               // TP2 Close Percent (20% remains for final TP)
+
+//--- Enhanced Alerts
+input group "=== Enhanced Alert System ==="
+input bool               InpUseTelegram = false;               // Use Telegram Alerts
+input string             InpTelegramToken = "";                // Telegram Bot Token
+input string             InpTelegramChatID = "";               // Telegram Chat ID
+input bool               InpUseEmailAlerts = false;            // Use Email Alerts
+input string             InpEmailSubjectPrefix = "[TradingAssistant]"; // Email Subject Prefix
+input bool               InpUseCustomSounds = true;            // Use Custom Sound Files
+input int                InpAlertCooldownSeconds = 60;         // Alert Cooldown (seconds)
+
 //+------------------------------------------------------------------+
 //| Global Objects                                                    |
 //+------------------------------------------------------------------+
-CModernDashboard      *Dashboard;
-CSignalDetector       *SignalDetector;
-CTradeManager         *TradeManager;
-CExecutionProtection  *ExecProtection;
-CPositionSizing       *PositionSizing;
-CAlertSystem          *AlertSystem;
+CModernDashboard       *Dashboard;
+CSignalDetector        *SignalDetector;
+CTradeManager          *TradeManager;
+CExecutionProtection   *ExecProtection;
+CPositionSizing        *PositionSizing;
+CAlertSystem           *AlertSystem;
+
+// NEW ENHANCED MODULES
+CSignalHistory         *SignalHistory;
+CAdvancedFilters       *AdvancedFilters;
+CRiskManager           *RiskManager;
+CPerformanceTracker    *PerformanceTracker;
+CPartialPositionManager *PartialPositionMgr;
+CMarketAnalysis        *MarketAnalysis;
+CEnhancedAlertSystem   *EnhancedAlerts;
 
 //--- Global variables
 datetime g_last_bar_time = 0;
@@ -166,6 +227,54 @@ int OnInit()
    AlertSystem.EnableSound(InpEnableSound);
    AlertSystem.EnablePopup(InpEnablePopup);
 
+   // Initialize NEW ENHANCED MODULES
+
+   // Signal History
+   SignalHistory = new CSignalHistory();
+
+   // Advanced Filters
+   AdvancedFilters = new CAdvancedFilters();
+   if(!AdvancedFilters.Initialize(_Symbol, InpTimeframe))
+   {
+      Print("Warning: Failed to initialize advanced filters");
+   }
+   AdvancedFilters.SetVolumeFilter(InpUseVolumeFilter, InpVolumeMultiplier);
+   AdvancedFilters.SetMultiTimeframeFilter(InpUseMultiTFFilter, InpHigherTimeframe);
+   AdvancedFilters.SetSpreadFilter(InpUseSpreadFilter, InpMaxSpreadPips);
+   AdvancedFilters.SetSessionFilter(InpUseSessionFilter, InpSessionStartHour, InpSessionEndHour);
+
+   // Risk Manager
+   RiskManager = new CRiskManager();
+   RiskManager.SetDailyLossLimit(InpUseDailyLossLimit, InpDailyLossLimitPct);
+   RiskManager.SetDailyProfitTarget(InpUseDailyProfitTarget, InpDailyProfitTargetPct);
+   RiskManager.SetMaxTradesPerDay(InpUseMaxTradesLimit, InpMaxTradesPerDay);
+   RiskManager.SetDrawdownLimit(InpUseDrawdownLimit, InpMaxDrawdownPct);
+   RiskManager.SetConsecutiveLossLimit(InpUseConsecLossLimit, InpMaxConsecutiveLosses);
+
+   // Performance Tracker
+   PerformanceTracker = new CPerformanceTracker();
+   PerformanceTracker.Initialize();
+
+   // Partial Position Manager
+   PartialPositionMgr = new CPartialPositionManager();
+   PartialPositionMgr.SetPartialClose(InpUsePartialClose, InpTP1_RR, InpTP1_ClosePct, InpTP2_RR, InpTP2_ClosePct);
+
+   // Market Analysis
+   MarketAnalysis = new CMarketAnalysis();
+   if(!MarketAnalysis.Initialize(_Symbol, InpTimeframe))
+   {
+      Print("Warning: Failed to initialize market analysis");
+   }
+
+   // Enhanced Alert System
+   EnhancedAlerts = new CEnhancedAlertSystem();
+   EnhancedAlerts.SetPushNotifications(InpEnablePushNotifications);
+   EnhancedAlerts.SetTerminalAlert(InpEnableAlerts);
+   EnhancedAlerts.SetSoundAlert(InpUseCustomSounds, "alert2.wav", "ok.wav", "timeout.wav");
+   EnhancedAlerts.SetEmailAlert(InpUseEmailAlerts, InpEmailSubjectPrefix);
+   EnhancedAlerts.SetTelegram(InpUseTelegram, InpTelegramToken, InpTelegramChatID);
+   EnhancedAlerts.SetAlertCooldown(InpAlertCooldownSeconds);
+
    g_initialized = true;
    Print("Trading Assistant initialized successfully");
    Print("Monitoring ", _Symbol, " on ", EnumToString(InpTimeframe));
@@ -204,6 +313,25 @@ void OnDeinit(const int reason)
    if(AlertSystem != NULL)
       delete AlertSystem;
 
+   // Cleanup NEW ENHANCED MODULES
+   if(SignalHistory != NULL)
+      delete SignalHistory;
+   if(AdvancedFilters != NULL)
+      delete AdvancedFilters;
+   if(RiskManager != NULL)
+      delete RiskManager;
+   if(PerformanceTracker != NULL)
+   {
+      PerformanceTracker.ExportDailyReport(); // Export final report on shutdown
+      delete PerformanceTracker;
+   }
+   if(PartialPositionMgr != NULL)
+      delete PartialPositionMgr;
+   if(MarketAnalysis != NULL)
+      delete MarketAnalysis;
+   if(EnhancedAlerts != NULL)
+      delete EnhancedAlerts;
+
    Print("Trading Assistant stopped. Reason: ", reason);
 }
 
@@ -215,6 +343,10 @@ void OnTick()
    if(!g_initialized)
       return;
 
+   // Update NEW ENHANCED MODULES
+   RiskManager.Update();  // Check risk limits
+   MarketAnalysis.Update(); // Update market analysis
+
    // Update execution protection on every tick
    ExecProtection.Update();
 
@@ -224,11 +356,19 @@ void OnTick()
    // Check for new manually opened positions
    TradeManager.CheckForNewPosition();
 
-   // Manage existing positions (SL/TP/Trailing)
+   // Manage existing positions (SL/TP/Trailing + Partial Close)
    if(TradeManager.HasActivePosition())
    {
       if(ExecProtection.IsSafeToModify())
          TradeManager.ManagePosition();
+
+      // Check for partial position close opportunities
+      if(InpUsePartialClose)
+      {
+         ulong ticket = PositionGetTicket(0);
+         if(ticket > 0)
+            PartialPositionMgr.CheckPartialClose(ticket);
+      }
    }
 
    // Continuously scan for signals (updates strength meter even without new bar)
@@ -252,6 +392,13 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnNewBar()
 {
+   // Check risk management limits first
+   if(!RiskManager.IsTradingAllowed())
+   {
+      Print("Trading blocked by Risk Manager: ", RiskManager.GetBlockReason());
+      return;
+   }
+
    // Check if trading is allowed at this time
    if(!IsTradingTimeAllowed())
    {
@@ -264,14 +411,21 @@ void OnNewBar()
 
    if(signal_found)
    {
+      string signal_type = SignalDetector.GetSignalType();
+      int signal_strength = SignalDetector.GetSignalStrength();
+
+      // Apply advanced filters
+      if(!AdvancedFilters.PassesAllFilters(signal_type))
+      {
+         Print("Signal rejected by advanced filters");
+         return;
+      }
+
       // Clear previous chart lines before drawing new ones
       if(Dashboard != NULL)
       {
          Dashboard.ClearChartLines();
       }
-
-      string signal_type = SignalDetector.GetSignalType();
-      int signal_strength = SignalDetector.GetSignalStrength();
 
       Print("========================================");
       Print("HIGH-QUALITY SIGNAL DETECTED!");
@@ -281,7 +435,7 @@ void OnNewBar()
       Print("Review the chart and decide if you want to enter manually.");
       Print("EA will manage the trade after you open it.");
 
-      // Send alert to trader
+      // Send alerts
       AlertSystem.SendSignalAlert(signal_type, signal_strength);
 
       // Calculate recommended position size
@@ -303,6 +457,16 @@ void OnNewBar()
       Print("Recommended Lot Size: ", DoubleToString(g_recommended_lot, 2));
       Print("Risk: ", DoubleToString(PositionSizing.GetCurrentRiskPercent(), 1), "%");
       Print("Target: ", DoubleToString(PositionSizing.GetCurrentRewardPercent(), 1), "%");
+
+      // Add to signal history
+      double current_price = SymbolInfoDouble(_Symbol, (signal_type == "BUY") ? SYMBOL_ASK : SYMBOL_BID);
+      SignalHistory.AddSignal(signal_type, signal_strength, current_price);
+
+      // Send enhanced alert with more details
+      EnhancedAlerts.SendSignalAlert(signal_type, signal_strength, current_price, g_recommended_lot);
+
+      // Notify risk manager of new trade intent
+      RiskManager.OnNewTrade();
 
       // Show on-screen entry popup
       if(InpShowEntryPopup && Dashboard != NULL)
@@ -406,9 +570,47 @@ void UpdateDashboard()
    // Statistics Panel
    int signals_today = SignalDetector.GetSignalsToday();
    int signals_week = SignalDetector.GetSignalsThisWeek();
-   double win_rate = 0.0;  // Would need to track trade history
-   double total_profit = AccountInfoDouble(ACCOUNT_BALANCE) - AccountInfoDouble(ACCOUNT_EQUITY);
+   double win_rate = PerformanceTracker.GetWinRate();
+   double total_profit = PerformanceTracker.GetNetProfit();
    Dashboard.UpdateStatsPanel(signals_today, signals_week, win_rate, total_profit);
+
+   // NEW ENHANCED PANELS
+
+   // Market Analysis Panel
+   Dashboard.UpdateMarketAnalysisPanel(
+      MarketAnalysis.GetTrend(),
+      MarketAnalysis.GetVolatility(),
+      MarketAnalysis.GetSupport(),
+      MarketAnalysis.GetResistance(),
+      MarketAnalysis.GetATR()
+   );
+
+   // Performance Panel
+   Dashboard.UpdatePerformancePanel(
+      PerformanceTracker.GetNetProfit(),
+      PerformanceTracker.GetWinRate(),
+      PerformanceTracker.GetProfitFactor(),
+      PerformanceTracker.GetTotalTrades()
+   );
+
+   // Filter Status Panel
+   Dashboard.UpdateFilterStatusPanel(
+      AdvancedFilters.GetFilterStatus(),
+      RiskManager.IsTradingAllowed(),
+      RiskManager.GetBlockReason()
+   );
+
+   // Risk Limits Panel
+   Dashboard.UpdateRiskLimitsPanel(
+      RiskManager.GetDailyPnL(),
+      RiskManager.GetWeeklyPnL(),
+      RiskManager.GetTradesToday(),
+      RiskManager.GetConsecutiveLosses()
+   );
+
+   // Signal History Panel (if we have history)
+   string recent_signals[];
+   // TODO: Format last 5 signals from SignalHistory
 
    Dashboard.Update();
 }
