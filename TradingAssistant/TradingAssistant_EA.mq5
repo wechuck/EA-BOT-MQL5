@@ -78,6 +78,8 @@ input bool               InpShowDashboard = true;              // Show Dashboard
 input int                InpDashboardX = 20;                   // Dashboard X Position
 input int                InpDashboardY = 30;                   // Dashboard Y Position
 input ENUM_TIMEFRAMES    InpTimeframe = PERIOD_M15;            // Analysis Timeframe (M15 recommended)
+input bool               InpShowEntryPopup = true;             // Show Entry Popup Alert
+input bool               InpBlockFridayLate = true;            // Block Trading Friday after 22:00
 
 //+------------------------------------------------------------------+
 //| Global Objects                                                    |
@@ -92,6 +94,7 @@ CAlertSystem          *AlertSystem;
 //--- Global variables
 datetime g_last_bar_time = 0;
 bool g_initialized = false;
+double g_recommended_lot = 0; // Store recommended lot for dashboard
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
@@ -249,6 +252,13 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnNewBar()
 {
+   // Check if trading is allowed at this time
+   if(!IsTradingTimeAllowed())
+   {
+      Print("Trading blocked: Friday after 22:00 (high risk period)");
+      return;
+   }
+
    // Scan for trading signals
    bool signal_found = SignalDetector.ScanForSignal();
 
@@ -282,9 +292,17 @@ void OnNewBar()
       double sl_distance = atr_value * InpATRMultiplierSL / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       PositionSizing.CalculateLotSize(sl_distance);
 
-      Print("Recommended Lot Size: ", DoubleToString(PositionSizing.GetRecommendedLot(), 2));
+      g_recommended_lot = PositionSizing.GetRecommendedLot();
+
+      Print("Recommended Lot Size: ", DoubleToString(g_recommended_lot, 2));
       Print("Risk: ", DoubleToString(PositionSizing.GetCurrentRiskPercent(), 1), "%");
       Print("Target: ", DoubleToString(PositionSizing.GetCurrentRewardPercent(), 1), "%");
+
+      // Show on-screen entry popup
+      if(InpShowEntryPopup && Dashboard != NULL)
+      {
+         Dashboard.ShowEntryPopup(signal_type, g_recommended_lot);
+      }
    }
 }
 
@@ -319,7 +337,9 @@ void UpdateDashboard()
    }
 
    string next_signal = SignalDetector.GetNextSignalTime();
-   Dashboard.UpdateSignalPanel(signal_status, signal_strength, next_signal);
+
+   // Use overloaded version with lot size
+   Dashboard.UpdateSignalPanel(signal_status, signal_strength, next_signal, g_recommended_lot);
 
    // Trade Management Panel
    bool has_position = TradeManager.HasActivePosition();
@@ -369,5 +389,25 @@ void OnChartEvent(const int id,
                   const string &sparam)
 {
    // Handle chart events if needed
+}
+
+//+------------------------------------------------------------------+
+//| Check if trading is allowed at current time                     |
+//+------------------------------------------------------------------+
+bool IsTradingTimeAllowed()
+{
+   if(!InpBlockFridayLate)
+      return true;  // No time restrictions if disabled
+
+   MqlDateTime time_struct;
+   TimeToStruct(TimeCurrent(), time_struct);
+
+   // Block trading on Friday (day 5) after 22:00
+   if(time_struct.day_of_week == 5 && time_struct.hour >= 22)
+   {
+      return false;  // High risk period - market closing for weekend
+   }
+
+   return true;  // Trading allowed
 }
 //+------------------------------------------------------------------+

@@ -44,6 +44,11 @@ private:
    string   m_panel_exec;      // Execution quality panel
    string   m_panel_stats;     // Statistics panel
 
+   // Entry popup alert
+   datetime m_popup_time;      // Time when popup was shown
+   bool     m_popup_active;    // Is popup currently displayed
+   string   m_popup_signal;    // Signal type for popup
+
 public:
    CModernDashboard();
    ~CModernDashboard();
@@ -60,10 +65,16 @@ public:
 
    // Panel updates
    void UpdateSignalPanel(string signal_status, int signal_strength, string next_signal);
+   void UpdateSignalPanel(string signal_status, int signal_strength, string next_signal, double recommended_lot);
    void UpdateTradePanel(bool has_position, double sl, double tp, double profit, bool trailing_active);
    void UpdateRiskPanel(double balance, double lot_size, double risk_pct, double reward_pct);
    void UpdateExecutionPanel(double spread, int spread_status, string exec_quality);
    void UpdateStatsPanel(int signals_today, int signals_week, double win_rate, double total_profit);
+
+   // Entry popup alert
+   void ShowEntryPopup(string signal_type, double lot_size);
+   void HideEntryPopup();
+   void UpdateEntryPopup();
 
 private:
    // Drawing helpers
@@ -89,6 +100,11 @@ CModernDashboard::CModernDashboard()
    m_width = 450;
    m_height = 650;
    m_is_visible = true;
+
+   // Popup alert
+   m_popup_active = false;
+   m_popup_time = 0;
+   m_popup_signal = "";
 }
 
 //+------------------------------------------------------------------+
@@ -485,6 +501,140 @@ void CModernDashboard::Show()
 void CModernDashboard::Update()
 {
    // Called periodically to refresh display
+   UpdateEntryPopup(); // Check if popup should be hidden
    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Overloaded UpdateSignalPanel with lot size                      |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateSignalPanel(string signal_status, int signal_strength, string next_signal, double recommended_lot)
+{
+   int panel_y = m_y_pos + 70;
+
+   // Status indicator with more states
+   int status_level = 0;
+   if(signal_status == "ACTIVE")
+      status_level = 2;       // Green - signal active
+   else if(signal_status == "SCANNING")
+      status_level = 1;       // Yellow - analyzing potential signal
+   else if(signal_status == "WATCHING")
+      status_level = 1;       // Yellow - watching market
+   else
+      status_level = 0;       // Red/Gray - idle
+
+   DrawStatusIndicator(m_prefix + "SignalIndicator", m_x_pos + 27, panel_y + 35, status_level);
+
+   // Signal status text with color
+   color status_color = DASHBOARD_TEXT_MUTED;
+   if(signal_status == "ACTIVE")
+      status_color = DASHBOARD_SUCCESS_COLOR;
+   else if(signal_status == "SCANNING")
+      status_color = DASHBOARD_WARNING_COLOR;
+   else if(signal_status == "WATCHING")
+      status_color = DASHBOARD_INFO_COLOR;
+   else // IDLE
+      status_color = DASHBOARD_TEXT_MUTED;
+
+   DrawLabel(m_prefix + "SignalStatus", m_x_pos + 55, panel_y + 32, signal_status, status_color, 11, "Segoe UI Semibold");
+
+   // Signal strength bar
+   DrawLabel(m_prefix + "SignalStrengthLabel", m_x_pos + 27, panel_y + 58, "Signal Strength:", DASHBOARD_TEXT_MUTED, 8);
+   DrawProgressBar(m_prefix + "SignalStrengthBar", m_x_pos + 27, panel_y + 75, m_width - 84, 15, signal_strength,
+                   signal_strength >= 80 ? DASHBOARD_SUCCESS_COLOR :
+                   signal_strength >= 50 ? DASHBOARD_WARNING_COLOR : DASHBOARD_DANGER_COLOR);
+   DrawLabel(m_prefix + "SignalStrengthValue", m_x_pos + m_width - 55, panel_y + 73, IntegerToString(signal_strength) + "%", DASHBOARD_TEXT_COLOR, 9);
+
+   // Next signal countdown
+   DrawLabel(m_prefix + "NextSignalLabel", m_x_pos + 27, panel_y + 100, "Next Signal:", DASHBOARD_TEXT_MUTED, 8);
+   DrawLabel(m_prefix + "NextSignalValue", m_x_pos + 100, panel_y + 100, next_signal, DASHBOARD_INFO_COLOR, 8);
+
+   // Recommended lot size (prominent display)
+   if(signal_status == "ACTIVE" && recommended_lot > 0)
+   {
+      DrawLabel(m_prefix + "RecommendedLotLabel", m_x_pos + 220, panel_y + 100, "USE LOT:", DASHBOARD_TEXT_MUTED, 8);
+      DrawLabel(m_prefix + "RecommendedLotValue", m_x_pos + 280, panel_y + 98, DoubleToString(recommended_lot, 2),
+                DASHBOARD_ACCENT_COLOR, 12, "Segoe UI Bold");
+   }
+   else
+   {
+      DeleteObject(m_prefix + "RecommendedLotLabel");
+      DeleteObject(m_prefix + "RecommendedLotValue");
+   }
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Show Entry Popup Alert                                          |
+//+------------------------------------------------------------------+
+void CModernDashboard::ShowEntryPopup(string signal_type, double lot_size)
+{
+   m_popup_active = true;
+   m_popup_time = TimeCurrent();
+   m_popup_signal = signal_type;
+
+   // Center of screen position
+   int chart_width = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   int chart_height = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+   int popup_x = chart_width / 2 - 200;
+   int popup_y = chart_height / 2 - 100;
+
+   // Background box with shadow
+   DrawBox(m_prefix + "PopupBG", popup_x, popup_y, 400, 200, C'139,92,246', true); // Purple background
+
+   // "ENTRY NOW!" text
+   DrawLabel(m_prefix + "PopupTitle", popup_x + 80, popup_y + 30, "⚡ ENTRY NOW! ⚡", clrWhite, 24, "Arial Black");
+
+   // Signal type
+   DrawLabel(m_prefix + "PopupSignal", popup_x + 100, popup_y + 80, signal_type, DASHBOARD_SUCCESS_COLOR, 16, "Segoe UI Semibold");
+
+   // Lot size
+   DrawLabel(m_prefix + "PopupLotLabel", popup_x + 50, popup_y + 120, "Recommended Lot:", clrWhite, 12);
+   DrawLabel(m_prefix + "PopupLotValue", popup_x + 230, popup_y + 118, DoubleToString(lot_size, 2),
+             DASHBOARD_WARNING_COLOR, 16, "Segoe UI Bold");
+
+   // Auto-hide message
+   DrawLabel(m_prefix + "PopupTimer", popup_x + 110, popup_y + 160, "(Auto-hide in 60 seconds)", C'200,200,200', 8);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Hide Entry Popup Alert                                          |
+//+------------------------------------------------------------------+
+void CModernDashboard::HideEntryPopup()
+{
+   if(!m_popup_active)
+      return;
+
+   m_popup_active = false;
+   m_popup_time = 0;
+
+   // Delete all popup objects
+   DeleteObject(m_prefix + "PopupBG");
+   DeleteObject(m_prefix + "PopupBG_Shadow");
+   DeleteObject(m_prefix + "PopupTitle");
+   DeleteObject(m_prefix + "PopupSignal");
+   DeleteObject(m_prefix + "PopupLotLabel");
+   DeleteObject(m_prefix + "PopupLotValue");
+   DeleteObject(m_prefix + "PopupTimer");
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update Entry Popup (auto-hide after 60 seconds)                 |
+//+------------------------------------------------------------------+
+void CModernDashboard::UpdateEntryPopup()
+{
+   if(!m_popup_active)
+      return;
+
+   // Hide after 60 seconds
+   if(TimeCurrent() - m_popup_time >= 60)
+   {
+      HideEntryPopup();
+   }
 }
 //+------------------------------------------------------------------+
