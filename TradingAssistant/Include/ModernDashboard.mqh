@@ -179,13 +179,30 @@ void CModernDashboard::UpdateSignalPanel(string signal_status, int signal_streng
 {
    int panel_y = m_y_pos + 70;
 
-   // Status indicator
-   DrawStatusIndicator(m_prefix + "SignalIndicator", m_x_pos + 27, panel_y + 35,
-                       signal_status == "ACTIVE" ? 2 : signal_status == "WATCHING" ? 1 : 0);
+   // Status indicator with more states
+   int status_level = 0;
+   if(signal_status == "ACTIVE")
+      status_level = 2;       // Green - signal active
+   else if(signal_status == "SCANNING")
+      status_level = 1;       // Yellow - analyzing potential signal
+   else if(signal_status == "WATCHING")
+      status_level = 1;       // Yellow - watching market
+   else
+      status_level = 0;       // Red/Gray - idle
 
-   // Signal status text
-   color status_color = signal_status == "ACTIVE" ? DASHBOARD_SUCCESS_COLOR :
-                       signal_status == "WATCHING" ? DASHBOARD_WARNING_COLOR : DASHBOARD_TEXT_MUTED;
+   DrawStatusIndicator(m_prefix + "SignalIndicator", m_x_pos + 27, panel_y + 35, status_level);
+
+   // Signal status text with color
+   color status_color = DASHBOARD_TEXT_MUTED;
+   if(signal_status == "ACTIVE")
+      status_color = DASHBOARD_SUCCESS_COLOR;
+   else if(signal_status == "SCANNING")
+      status_color = DASHBOARD_WARNING_COLOR;
+   else if(signal_status == "WATCHING")
+      status_color = DASHBOARD_INFO_COLOR;
+   else // IDLE
+      status_color = DASHBOARD_TEXT_MUTED;
+
    DrawLabel(m_prefix + "SignalStatus", m_x_pos + 55, panel_y + 32, signal_status, status_color, 11, "Segoe UI Semibold");
 
    // Signal strength bar

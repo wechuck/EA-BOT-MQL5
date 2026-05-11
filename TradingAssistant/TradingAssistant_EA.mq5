@@ -77,7 +77,7 @@ input group "=== Dashboard Settings ==="
 input bool               InpShowDashboard = true;              // Show Dashboard
 input int                InpDashboardX = 20;                   // Dashboard X Position
 input int                InpDashboardY = 30;                   // Dashboard Y Position
-input ENUM_TIMEFRAMES    InpTimeframe = PERIOD_H1;             // Analysis Timeframe
+input ENUM_TIMEFRAMES    InpTimeframe = PERIOD_M15;            // Analysis Timeframe (M15 recommended)
 
 //+------------------------------------------------------------------+
 //| Global Objects                                                    |
@@ -228,7 +228,11 @@ void OnTick()
          TradeManager.ManagePosition();
    }
 
-   // Check for new bar (for signal detection)
+   // Continuously scan for signals (updates strength meter even without new bar)
+   // This makes the dashboard responsive and shows real-time signal strength
+   SignalDetector.ScanForSignal();
+
+   // Check for new bar (for signal alerting)
    datetime current_bar_time = iTime(_Symbol, InpTimeframe, 0);
    if(current_bar_time != g_last_bar_time)
    {
@@ -236,7 +240,7 @@ void OnTick()
       OnNewBar();
    }
 
-   // Update dashboard
+   // Update dashboard on every tick for live updates
    UpdateDashboard();
 }
 
@@ -292,9 +296,28 @@ void UpdateDashboard()
    if(!InpShowDashboard || Dashboard == NULL)
       return;
 
-   // Signal Panel
-   string signal_status = SignalDetector.IsSignalActive() ? "ACTIVE" : "WATCHING";
+   // Signal Panel - show dynamic status
+   string signal_status = "WATCHING";
    int signal_strength = SignalDetector.GetSignalStrength();
+
+   // Determine status based on signal strength and active state
+   if(SignalDetector.IsSignalActive())
+   {
+      signal_status = "ACTIVE";
+   }
+   else if(signal_strength >= 50)
+   {
+      signal_status = "SCANNING"; // Intermediate state showing analysis
+   }
+   else if(signal_strength > 0)
+   {
+      signal_status = "WATCHING";
+   }
+   else
+   {
+      signal_status = "IDLE";
+   }
+
    string next_signal = SignalDetector.GetNextSignalTime();
    Dashboard.UpdateSignalPanel(signal_status, signal_strength, next_signal);
 

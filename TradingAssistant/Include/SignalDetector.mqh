@@ -243,15 +243,7 @@ bool CSignalDetector::ScanForSignal()
    UpdateDailyReset();
    UpdateWeeklyReset();
 
-   // Check if we can generate a signal
-   if(!CanGenerateSignal())
-   {
-      m_signal_active = false;
-      m_current_signal_strength = 0;
-      return false;
-   }
-
-   // Get indicator values
+   // Always get indicator values and calculate strength (for dashboard display)
    double rsi_value = 0;
    double stoch_main = 0, stoch_signal = 0;
    double adx_value = 0;
@@ -262,8 +254,16 @@ bool CSignalDetector::ScanForSignal()
    bool adx_ok = CheckADXCondition(adx_value);
    bool structure_ok = CheckMarketStructure();
 
-   // Calculate overall signal strength
+   // Always calculate signal strength (even if in cooldown)
    m_current_signal_strength = CalculateSignalStrength(rsi_value, stoch_main, adx_value, structure_ok);
+
+   // Check if we can actually generate a signal alert
+   if(!CanGenerateSignal())
+   {
+      m_signal_active = false;
+      // Keep strength displayed but don't trigger signal
+      return false;
+   }
 
    // A valid signal requires ALL conditions to be met
    if(rsi_ok && stoch_ok && adx_ok && structure_ok && m_current_signal_strength >= 70)
