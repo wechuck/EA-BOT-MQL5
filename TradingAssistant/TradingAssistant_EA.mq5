@@ -180,7 +180,7 @@ int OnInit()
    // Initialize Dashboard
    if(InpShowDashboard)
    {
-      if(!Dashboard.Init("TradingAssist", InpDashboardX, InpDashboardY, 450, 650))
+      if(!Dashboard.Init("TradingAssist", InpDashboardX, InpDashboardY, 450, 900))
       {
          Print("Error: Failed to initialize dashboard");
          return INIT_FAILED;

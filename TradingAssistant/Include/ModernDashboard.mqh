@@ -54,7 +54,7 @@ public:
    ~CModernDashboard();
 
    // Initialization
-   bool Init(string prefix, int x, int y, int width = 450, int height = 650);
+   bool Init(string prefix, int x, int y, int width = 450, int height = 900);
    void Deinit();
 
    // Main dashboard drawing
@@ -113,7 +113,7 @@ CModernDashboard::CModernDashboard()
    m_x_pos = 20;
    m_y_pos = 30;
    m_width = 450;
-   m_height = 650;
+   m_height = 900;  // Increased for all new panels
    m_is_visible = true;
 
    // Popup alert
@@ -133,7 +133,7 @@ CModernDashboard::~CModernDashboard()
 //+------------------------------------------------------------------+
 //| Initialize dashboard                                             |
 //+------------------------------------------------------------------+
-bool CModernDashboard::Init(string prefix, int x, int y, int width = 450, int height = 650)
+bool CModernDashboard::Init(string prefix, int x, int y, int width = 450, int height = 900)
 {
    m_prefix = prefix + "_";
    m_x_pos = x;
@@ -168,8 +168,8 @@ void CModernDashboard::Draw()
 
    int y_offset = m_y_pos;
 
-   // Main background panel
-   DrawBox(m_prefix + "MainBG", m_x_pos, m_y_pos, m_width, m_height, DASHBOARD_BG_COLOR, true);
+   // Main background panel - increased height for all new panels
+   DrawBox(m_prefix + "MainBG", m_x_pos, m_y_pos, m_width, 850, DASHBOARD_BG_COLOR, true);
 
    // Header
    DrawLabel(m_prefix + "HeaderTitle", m_x_pos + 20, y_offset + 15, "TRADING ASSISTANT", DASHBOARD_BORDER_COLOR, 14, "Segoe UI Semibold");
@@ -196,9 +196,36 @@ void CModernDashboard::Draw()
    DrawLabel(m_prefix + "ExecTitle", m_x_pos + 27, y_offset + 12, "EXECUTION QUALITY", DASHBOARD_TEXT_MUTED, 8);
    y_offset += 100;
 
-   // Statistics Panel (bottom)
+   // Statistics Panel
    DrawPanel(m_panel_stats, m_x_pos + 15, y_offset, m_width - 30, 70, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
    DrawLabel(m_prefix + "StatsTitle", m_x_pos + 27, y_offset + 12, "STATISTICS", DASHBOARD_TEXT_MUTED, 8);
+   y_offset += 90;
+
+   // NEW ENHANCED PANELS
+
+   // Filter Status Panel
+   DrawPanel(m_prefix + "PanelFilters", m_x_pos + 15, y_offset, m_width - 30, 90, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
+   DrawLabel(m_prefix + "FiltersTitle", m_x_pos + 27, y_offset + 12, "FILTER STATUS", DASHBOARD_TEXT_MUTED, 8);
+   y_offset += 110;
+
+   // Performance Panel
+   DrawPanel(m_prefix + "PanelPerformance", m_x_pos + 15, y_offset, m_width - 30, 80, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
+   DrawLabel(m_prefix + "PerformanceTitle", m_x_pos + 27, y_offset + 12, "PERFORMANCE", DASHBOARD_TEXT_MUTED, 8);
+   y_offset += 100;
+
+   // Market Analysis Panel
+   DrawPanel(m_prefix + "PanelMarket", m_x_pos + 15, y_offset, m_width - 30, 100, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
+   DrawLabel(m_prefix + "MarketTitle", m_x_pos + 27, y_offset + 12, "MARKET ANALYSIS", DASHBOARD_TEXT_MUTED, 8);
+   y_offset += 120;
+
+   // Risk Limits Panel
+   DrawPanel(m_prefix + "PanelRiskLimits", m_x_pos + 15, y_offset, m_width - 30, 80, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
+   DrawLabel(m_prefix + "RiskLimitsTitle", m_x_pos + 27, y_offset + 12, "RISK LIMITS", DASHBOARD_TEXT_MUTED, 8);
+   y_offset += 100;
+
+   // Signal History Panel
+   DrawPanel(m_prefix + "PanelHistory", m_x_pos + 15, y_offset, m_width - 30, 120, DASHBOARD_PANEL_COLOR, DASHBOARD_BORDER_COLOR);
+   DrawLabel(m_prefix + "HistoryTitle", m_x_pos + 27, y_offset + 12, "SIGNAL HISTORY", DASHBOARD_TEXT_MUTED, 8);
 
    ChartRedraw();
 }
