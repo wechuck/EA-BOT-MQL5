@@ -78,7 +78,17 @@ CSignalHistory::CSignalHistory()
    m_losing_signals = 0;
    m_total_pips = 0;
 
-   ArrayInitialize(m_history, 0);
+   // Initialize struct array manually
+   for(int i = 0; i < 100; i++)
+   {
+      m_history[i].time = 0;
+      m_history[i].type = "";
+      m_history[i].strength = 0;
+      m_history[i].entry_price = 0;
+      m_history[i].result_pips = 0;
+      m_history[i].was_profitable = false;
+      m_history[i].is_tracked = false;
+   }
 }
 
 //+------------------------------------------------------------------+

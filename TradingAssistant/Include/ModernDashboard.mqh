@@ -72,7 +72,7 @@ public:
    void UpdateStatsPanel(int signals_today, int signals_week, double win_rate, double total_profit);
 
    // NEW PANELS - Enhanced features
-   void UpdateSignalHistoryPanel(string recent_signals[]);
+   void UpdateSignalHistoryPanel(string &recent_signals[]);
    void UpdateMarketAnalysisPanel(string trend, string volatility, double support, double resistance, double atr);
    void UpdatePerformancePanel(double total_profit, double win_rate, double profit_factor, int total_trades);
    void UpdateFilterStatusPanel(string active_filters, bool trading_allowed, string block_reason);
@@ -947,7 +947,7 @@ void CModernDashboard::UpdateRiskLimitsPanel(double daily_pnl, double weekly_pnl
 //+------------------------------------------------------------------+
 //| Update Signal History Panel                                      |
 //+------------------------------------------------------------------+
-void CModernDashboard::UpdateSignalHistoryPanel(string recent_signals[])
+void CModernDashboard::UpdateSignalHistoryPanel(string &recent_signals[])
 {
    int panel_y = m_y_pos + 740;
    int array_size = ArraySize(recent_signals);

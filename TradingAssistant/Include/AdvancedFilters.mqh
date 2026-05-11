@@ -171,14 +171,14 @@ bool CAdvancedFilters::CheckVolumeCondition()
    if(m_volume_handle == INVALID_HANDLE)
       return true;
 
-   long volumes[];
+   double volumes[];
    ArraySetAsSeries(volumes, true);
 
    if(CopyBuffer(m_volume_handle, 0, 0, 20, volumes) <= 0)
       return true;
 
    // Calculate average volume
-   long avg_volume = 0;
+   double avg_volume = 0;
    for(int i = 1; i < 20; i++)
       avg_volume += volumes[i];
    avg_volume /= 19;

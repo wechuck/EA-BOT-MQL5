@@ -608,9 +608,8 @@ void UpdateDashboard()
       RiskManager.GetConsecutiveLosses()
    );
 
-   // Signal History Panel (if we have history)
-   string recent_signals[];
-   // TODO: Format last 5 signals from SignalHistory
+   // Signal History Panel - format and display recent signals
+   // TODO: Implement signal history formatting when needed
 
    Dashboard.Update();
 }

@@ -76,7 +76,7 @@ public:
    double GetDailyPnL();
    double GetWeeklyPnL();
    double GetCurrentDrawdown();
-   int GetTradesTo day() { return m_trades_today; }
+   int GetTradesToday() { return m_trades_today; }
    int GetConsecutiveLosses() { return m_current_consecutive_losses; }
 
    // Reset
