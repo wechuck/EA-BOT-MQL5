@@ -41,11 +41,14 @@ input int                InpSignalCooldownMinutes = 240;       // Signal Cooldow
 
 //--- Trade Management Settings
 input group "=== Trade Management ==="
-input double             InpRiskRewardRatio = 3.0;             // Risk:Reward Ratio (1:X)
-input double             InpATRMultiplierSL = 1.5;             // ATR Multiplier for SL
-input double             InpTrailingDistance = 200;            // Trailing Stop Distance (points)
-input double             InpTrailingStep = 50;                 // Trailing Stop Step (points)
-input double             InpBreakevenDistance = 100;           // Breakeven Distance (points)
+input double             InpRiskRewardRatio = 4.5;             // Risk:Reward Ratio (1:X) - 1:4 to 1:5
+input bool               InpUseFixedDistance = true;           // Use Fixed SL/TP Distance
+input double             InpFixedSLDistance = 200;             // Fixed SL Distance (points)
+input double             InpFixedTPDistance = 900;             // Fixed TP Distance (points) - 800-1000
+input double             InpATRMultiplierSL = 1.5;             // ATR Multiplier for SL (if not fixed)
+input double             InpTrailingDistance = 400;            // Trailing Stop Distance (points)
+input double             InpTrailingStep = 100;                // Trailing Stop Step (points)
+input double             InpBreakevenDistance = 200;           // Breakeven Distance (points)
 
 //--- Risk & Position Sizing
 input group "=== Position Sizing ==="
@@ -140,6 +143,8 @@ int OnInit()
    TradeManager.SetRiskReward(InpRiskRewardRatio);
    TradeManager.SetATRMultipliers(InpATRMultiplierSL, InpATRMultiplierSL * InpRiskRewardRatio);
    TradeManager.SetTrailingParams(InpTrailingDistance, InpTrailingStep);
+   TradeManager.SetFixedDistance(InpUseFixedDistance, InpFixedSLDistance, InpFixedTPDistance);
+   TradeManager.SetBreakevenDistance(InpBreakevenDistance);
 
    // Initialize Execution Protection
    ExecProtection.SetSpreadLimits(InpMaxSpread, InpWarningSpread);

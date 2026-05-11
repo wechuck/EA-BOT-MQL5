@@ -28,6 +28,11 @@ private:
    double   m_atr_multiplier_sl;  // ATR multiplier for SL
    double   m_atr_multiplier_tp;  // ATR multiplier for TP
 
+   // Fixed distance mode
+   bool     m_use_fixed_distance; // Use fixed SL/TP instead of ATR
+   double   m_fixed_sl_distance;  // Fixed SL distance in points
+   double   m_fixed_tp_distance;  // Fixed TP distance in points
+
    int      m_atr_handle;
    int      m_atr_period;
 
@@ -43,6 +48,8 @@ public:
    void SetRiskReward(double rr_ratio);
    void SetATRMultipliers(double sl_mult, double tp_mult);
    void SetTrailingParams(double distance_points, double step_points);
+   void SetFixedDistance(bool use_fixed, double sl_points, double tp_points);
+   void SetBreakevenDistance(double distance_points);
 
    // Trade detection and management
    bool CheckForNewPosition();
@@ -78,13 +85,17 @@ CTradeManager::CTradeManager()
    m_trailing_active = false;
    m_breakeven_set = false;
 
-   m_rr_ratio = 3.0;  // 1:3 risk reward
+   m_rr_ratio = 4.5;  // 1:4.5 risk reward (1:4 to 1:5 range)
    m_atr_multiplier_sl = 1.5;
-   m_atr_multiplier_tp = 4.5;  // 3x the SL distance
+   m_atr_multiplier_tp = 6.75;  // 4.5x the SL distance
 
-   m_trailing_distance = 200;  // points
-   m_trailing_step = 50;       // points
-   m_breakeven_distance = 100; // points
+   m_use_fixed_distance = true;  // Use fixed distances by default
+   m_fixed_sl_distance = 200;    // 200 points SL
+   m_fixed_tp_distance = 900;    // 900 points TP (4.5x SL)
+
+   m_trailing_distance = 400;  // points - increased for larger TP
+   m_trailing_step = 100;      // points - increased step
+   m_breakeven_distance = 200; // points - doubled for larger trades
 
    m_atr_handle = INVALID_HANDLE;
    m_atr_period = 14;
@@ -148,6 +159,24 @@ void CTradeManager::SetTrailingParams(double distance_points, double step_points
 {
    m_trailing_distance = distance_points;
    m_trailing_step = step_points;
+}
+
+//+------------------------------------------------------------------+
+//| Set fixed distance mode                                          |
+//+------------------------------------------------------------------+
+void CTradeManager::SetFixedDistance(bool use_fixed, double sl_points, double tp_points)
+{
+   m_use_fixed_distance = use_fixed;
+   m_fixed_sl_distance = sl_points;
+   m_fixed_tp_distance = tp_points;
+}
+
+//+------------------------------------------------------------------+
+//| Set breakeven distance                                           |
+//+------------------------------------------------------------------+
+void CTradeManager::SetBreakevenDistance(double distance_points)
+{
+   m_breakeven_distance = distance_points;
 }
 
 //+------------------------------------------------------------------+
@@ -313,8 +342,20 @@ bool CTradeManager::SetInitialSLTP(ulong ticket)
 //+------------------------------------------------------------------+
 double CTradeManager::CalculateSL(ENUM_POSITION_TYPE type, double entry_price)
 {
-   double atr = GetATRValue();
-   double sl_distance = atr * m_atr_multiplier_sl;
+   double sl_distance;
+
+   if(m_use_fixed_distance)
+   {
+      // Use fixed distance in points
+      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      sl_distance = m_fixed_sl_distance * point;
+   }
+   else
+   {
+      // Use ATR-based distance
+      double atr = GetATRValue();
+      sl_distance = atr * m_atr_multiplier_sl;
+   }
 
    double sl = 0;
    if(type == POSITION_TYPE_BUY)
@@ -331,7 +372,19 @@ double CTradeManager::CalculateSL(ENUM_POSITION_TYPE type, double entry_price)
 //+------------------------------------------------------------------+
 double CTradeManager::CalculateTP(ENUM_POSITION_TYPE type, double entry_price, double sl_distance)
 {
-   double tp_distance = sl_distance * m_rr_ratio;
+   double tp_distance;
+
+   if(m_use_fixed_distance)
+   {
+      // Use fixed distance in points
+      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      tp_distance = m_fixed_tp_distance * point;
+   }
+   else
+   {
+      // Use ratio-based distance
+      tp_distance = sl_distance * m_rr_ratio;
+   }
 
    double tp = 0;
    if(type == POSITION_TYPE_BUY)
