@@ -265,7 +265,16 @@ void OnNewBar()
       AlertSystem.SendSignalAlert(signal_type, signal_strength);
 
       // Calculate recommended position size
-      double atr_value = iATR(_Symbol, InpTimeframe, 14);
+      int atr_handle = iATR(_Symbol, InpTimeframe, 14);
+      double atr_value = 0;
+      if(atr_handle != INVALID_HANDLE)
+      {
+         double atr_buffer[];
+         ArraySetAsSeries(atr_buffer, true);
+         if(CopyBuffer(atr_handle, 0, 0, 1, atr_buffer) > 0)
+            atr_value = atr_buffer[0];
+         IndicatorRelease(atr_handle);
+      }
       double sl_distance = atr_value * InpATRMultiplierSL / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       PositionSizing.CalculateLotSize(sl_distance);
 
@@ -337,28 +346,5 @@ void OnChartEvent(const int id,
                   const string &sparam)
 {
    // Handle chart events if needed
-}
-
-//+------------------------------------------------------------------+
-//| Get ATR value helper                                             |
-//+------------------------------------------------------------------+
-double iATR(string symbol, ENUM_TIMEFRAMES timeframe, int period)
-{
-   int handle = iATR(symbol, timeframe, period);
-   if(handle == INVALID_HANDLE)
-      return 0;
-
-   double atr[];
-   ArraySetAsSeries(atr, true);
-
-   if(CopyBuffer(handle, 0, 0, 1, atr) < 1)
-   {
-      IndicatorRelease(handle);
-      return 0;
-   }
-
-   double value = atr[0];
-   IndicatorRelease(handle);
-   return value;
 }
 //+------------------------------------------------------------------+
