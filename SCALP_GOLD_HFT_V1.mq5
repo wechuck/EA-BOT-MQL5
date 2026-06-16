@@ -515,7 +515,8 @@ bool OpenTrade(int signal)
          {
             double minVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
             double minMargin = 0;
-            OrderCalcMargin(orderType, _Symbol, minVol, checkPrice, minMargin);
+            if(!OrderCalcMargin(orderType, _Symbol, minVol, checkPrice, minMargin))
+               minMargin = 0;
             Print("MARGIN SKIP: Need $", DoubleToString(minMargin, 2),
                   " for min lot ", DoubleToString(minVol, 2),
                   " but only $", DoubleToString(freeMargin, 2), " free");
