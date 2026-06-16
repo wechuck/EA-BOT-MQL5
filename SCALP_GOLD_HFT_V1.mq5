@@ -62,7 +62,8 @@ input int      InpStochSlowing     = 3;            // Stochastic Slowing
 input group "=== POSITION RULES ==="
 input int      InpMaxPositions     = 1;            // Max Positions (standard)
 input int      InpMaxPosStrong     = 2;            // Max Positions (strong trend)
-input double   InpMaxMarginPct     = 80.0;         // Max Free Margin Usage for 2nd Trade (%)
+input double   InpMaxMarginPct     = 80.0;         // Max Free Margin Usage (%)
+input int      InpLossCooldownBars = 3;            // Bars to Skip After a SL Hit (anti-whipsaw)
 
 input group "=== SPREAD FILTER ==="
 input double   InpMaxSpreadPips    = 35.0;         // Max Allowed Spread (pips) — always active
@@ -116,6 +117,11 @@ datetime       g_lastBarTime;
 // Level progression
 double         g_levelTargets[];
 int            g_currentLevel;
+
+// Loss cooldown tracking
+int            g_barsSinceLoss;    // bars elapsed since last SL hit
+int            g_lastPosCount;     // position count on previous tick
+double         g_lastBalance;      // balance on previous tick
 
 // Dashboard object prefix
 string         g_dashPrefix = "SHFT_";
@@ -182,6 +188,11 @@ int OnInit()
    g_currentDay      = iTime(_Symbol, PERIOD_D1, 0);
    g_lastBarTime     = 0;
 
+   //--- Loss cooldown
+   g_barsSinceLoss = 999;
+   g_lastPosCount  = 0;
+   g_lastBalance   = AccountInfoDouble(ACCOUNT_BALANCE);
+
    //--- Dashboard
    if(InpShowDashboard) CreateDashboard();
 
@@ -222,7 +233,22 @@ void OnTick()
    //--- New bar detection
    datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    bool isNewBar = (barTime != g_lastBarTime);
-   if(isNewBar) g_lastBarTime = barTime;
+   if(isNewBar)
+   {
+      g_lastBarTime = barTime;
+      g_barsSinceLoss++;
+   }
+
+   //--- Detect SL hit: had positions last check, now fewer, and balance dropped
+   int curPosCount = CountMyPositions();
+   double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(curPosCount < g_lastPosCount && curBalance < g_lastBalance)
+   {
+      g_barsSinceLoss = 0;
+      Print("LOSS DETECTED: cooldown active for ", InpLossCooldownBars, " bars");
+   }
+   g_lastPosCount = curPosCount;
+   g_lastBalance  = curBalance;
 
    //--- New day reset
    datetime dayTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -275,6 +301,13 @@ void OnTick()
       //--- Spread filter
       double spreadPips = GetSpreadPips();
       if(spreadPips > InpMaxSpreadPips)
+      {
+         if(InpShowDashboard) UpdateDashboard();
+         return;
+      }
+
+      //--- Loss cooldown check
+      if(g_barsSinceLoss < InpLossCooldownBars)
       {
          if(InpShowDashboard) UpdateDashboard();
          return;
@@ -447,13 +480,15 @@ bool OpenTrade(int signal)
                " > free: $", DoubleToString(freeMargin, 2), ")");
          lotSize = reducedLots;
 
-         //--- Recalculate SL for reduced lot (wider SL = same dollar risk)
-         actualSLPips = riskDollars / (lotSize * g_pipValue);
-         if(actualSLPips < InpMinSLPips)
-            actualSLPips = InpMinSLPips;
+         //--- KEEP ORIGINAL SL — do NOT widen it
+         //--- Accept lower dollar risk instead of destroying R:R ratio
+         //--- At 0.01 lots with 150 pip SL: risk = $1.50 (7.5% of $20)
+         //--- This preserves R:R at 200:150 = 1.33:1 reward-to-risk
+         actualSLPips = InpMinSLPips;
          slPips = actualSLPips;
          if(InpAddSpreadToSL)
             slPips += spreadPips;
+         riskDollars = lotSize * actualSLPips * g_pipValue;
       }
    }
 
@@ -462,7 +497,12 @@ bool OpenTrade(int signal)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    double slDist = slPips * g_pipSize;
-   double tpDist = InpTPPips * g_pipSize;
+
+   //--- Scale TP proportionally if SL differs from base (maintain R:R)
+   double effectiveTPPips = InpTPPips;
+   if(actualSLPips > InpMinSLPips)
+      effectiveTPPips = InpTPPips * (actualSLPips / InpMinSLPips);
+   double tpDist = effectiveTPPips * g_pipSize;
 
    bool result = false;
 
@@ -476,6 +516,7 @@ bool OpenTrade(int signal)
                DoubleToString(ask, _Digits), " | SL: ", DoubleToString(sl, _Digits),
                " (", DoubleToString(slPips, 1), " pips) | TP: ", DoubleToString(tp, _Digits),
                " | Risk: $", DoubleToString(riskDollars, 2),
+               " | R:R 1:", DoubleToString(effectiveTPPips / slPips, 2),
                isStrong ? " [STRONG TREND]" : "");
    }
    else
@@ -488,6 +529,7 @@ bool OpenTrade(int signal)
                DoubleToString(bid, _Digits), " | SL: ", DoubleToString(sl, _Digits),
                " (", DoubleToString(slPips, 1), " pips) | TP: ", DoubleToString(tp, _Digits),
                " | Risk: $", DoubleToString(riskDollars, 2),
+               " | R:R 1:", DoubleToString(effectiveTPPips / slPips, 2),
                isStrong ? " [STRONG TREND]" : "");
    }
 
