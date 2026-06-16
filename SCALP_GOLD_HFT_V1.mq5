@@ -414,21 +414,46 @@ bool OpenTrade(int signal)
    if(InpAddSpreadToSL)
       slPips += spreadPips;
 
-   //--- Margin check for 2nd position
-   if(posCount > 0)
+   //--- MARGIN CHECK (for ALL trades — critical at low balances)
    {
       double marginReq = 0;
       double checkPrice = (direction == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                                            : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       ENUM_ORDER_TYPE orderType = (direction == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
       if(!OrderCalcMargin(orderType, _Symbol, lotSize, checkPrice, marginReq))
          return false;
+
       double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-      if(marginReq > freeMargin * InpMaxMarginPct / 100.0)
+      double usableMargin = freeMargin * InpMaxMarginPct / 100.0;
+
+      if(marginReq > usableMargin)
       {
-         double reducedLots = NormalizeLots(lotSize * (freeMargin * InpMaxMarginPct / 100.0) / marginReq);
-         if(reducedLots <= 0) return false;
+         //--- Reduce lot to what margin allows
+         double reducedLots = NormalizeLots(lotSize * usableMargin / marginReq);
+         if(reducedLots <= 0)
+         {
+            double minVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+            double minMargin = 0;
+            OrderCalcMargin(orderType, _Symbol, minVol, checkPrice, minMargin);
+            Print("MARGIN SKIP: Need $", DoubleToString(minMargin, 2),
+                  " for min lot ", DoubleToString(minVol, 2),
+                  " but only $", DoubleToString(freeMargin, 2), " free");
+            return false;
+         }
+         Print("MARGIN ADJ: Lot reduced from ", DoubleToString(lotSize, 2),
+               " to ", DoubleToString(reducedLots, 2),
+               " (margin: $", DoubleToString(marginReq, 2),
+               " > free: $", DoubleToString(freeMargin, 2), ")");
          lotSize = reducedLots;
+
+         //--- Recalculate SL for reduced lot (wider SL = same dollar risk)
+         actualSLPips = riskDollars / (lotSize * g_pipValue);
+         if(actualSLPips < InpMinSLPips)
+            actualSLPips = InpMinSLPips;
+         slPips = actualSLPips;
+         if(InpAddSpreadToSL)
+            slPips += spreadPips;
       }
    }
 
