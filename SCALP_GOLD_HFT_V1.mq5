@@ -63,14 +63,16 @@ input int      InpNYEnd            = 22;           // New York Session End Hour
 input group "=== INDICATOR: RSI ==="
 input int      InpRSIPeriod        = 14;           // RSI Period
 input double   InpRSIBuyMin        = 35.0;         // RSI Min for BUY (avoid oversold trap)
-input double   InpRSIBuyMax        = 75.0;         // RSI Max for BUY (avoid overbought)
-input double   InpRSISellMin       = 25.0;         // RSI Min for SELL (avoid oversold)
+input double   InpRSIBuyMax        = 65.0;         // RSI Max for BUY (don't buy exhausted moves)
+input double   InpRSISellMin       = 35.0;         // RSI Min for SELL (don't sell collapsed moves)
 input double   InpRSISellMax       = 65.0;         // RSI Max for SELL (avoid overbought trap)
 
 input group "=== INDICATOR: STOCHASTIC ==="
 input int      InpStochK           = 14;           // Stochastic %K Period
 input int      InpStochD           = 3;            // Stochastic %D Smoothing
 input int      InpStochSlowing     = 3;            // Stochastic Slowing
+input double   InpStochOBLevel     = 75.0;         // Overbought Level (don't BUY above this)
+input double   InpStochOSLevel     = 25.0;         // Oversold Level (don't SELL below this)
 
 input group "=== POSITION RULES ==="
 input int      InpMaxPositions     = 1;            // Max Positions (standard)
@@ -416,9 +418,26 @@ int CheckEntrySignal()
    if(bearishDI && rsi[1] > InpRSISellMin && rsi[1] < InpRSISellMax)
       confirms++;
 
-   //--- Stochastic confirmation
-   if(bullishDI && stK[1] > stD[1])   confirms++;   // Bullish momentum
-   if(bearishDI && stK[1] < stD[1])   confirms++;   // Bearish momentum
+   //--- Stochastic confirmation (with zone filter + fresh cross)
+   //--- BUY: K > D, K not overbought, K crossed D within last 2 bars
+   //--- SELL: K < D, K not oversold, K crossed D within last 2 bars
+   bool stochFreshCross = false;
+   if(bullishDI)
+   {
+      bool kAboveD     = (stK[1] > stD[1]);
+      bool notOB       = (stK[1] < InpStochOBLevel);
+      bool freshCross  = (stK[2] <= stD[2]);   // was below/equal on bar 2, now above
+      stochFreshCross  = freshCross;
+      if(kAboveD && notOB && freshCross) confirms++;
+   }
+   if(bearishDI)
+   {
+      bool kBelowD     = (stK[1] < stD[1]);
+      bool notOS       = (stK[1] > InpStochOSLevel);
+      bool freshCross  = (stK[2] >= stD[2]);   // was above/equal on bar 2, now below
+      stochFreshCross  = freshCross;
+      if(kBelowD && notOS && freshCross) confirms++;
+   }
 
    //--- Price action confirmation
    double open1  = iOpen(_Symbol, PERIOD_CURRENT, 1);
