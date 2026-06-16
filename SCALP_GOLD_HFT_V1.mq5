@@ -40,12 +40,25 @@ input bool     InpUseTrailing      = true;         // Enable Trailing Stop After
 input double   InpTrailDistPips    = 100.0;        // Trailing Distance Behind Price (pips)
 input double   InpTrailStepPips    = 20.0;         // Trailing Step — Min Advance to Move SL (pips)
 
-input group "=== INDICATOR: ADX ==="
+input group "=== INDICATOR: ADX (session-adaptive) ==="
 input int      InpADXPeriod        = 14;           // ADX Period
-input double   InpADXMinLevel      = 20.0;         // Min ADX for Entry (trend exists)
-input double   InpADXStrongLevel   = 30.0;         // ADX Level for Strong Trend (2nd trade)
+input double   InpADXAsian         = 22.0;         // Min ADX — Asian Session (gold is slow, spreads wider)
+input double   InpADXLondon        = 25.0;         // Min ADX — London Session (stronger setups)
+input double   InpADXNewYork       = 28.0;         // Min ADX — New York Session (strong momentum)
+input double   InpADXStrongAsian   = 28.0;         // Strong Trend ADX — Asian
+input double   InpADXStrongLondon  = 30.0;         // Strong Trend ADX — London
+input double   InpADXStrongNY      = 35.0;         // Strong Trend ADX — New York
+input bool     InpADXMustRise      = true;         // ADX Must Be Rising (ADX[1] > ADX[2])
 input double   InpMinDISeparation  = 5.0;          // Min |DI+ − DI−| for Standard Entry
 input double   InpStrongDISep      = 10.0;         // Min |DI+ − DI−| for Strong Trend
+
+input group "=== SESSION HOURS (broker server time) ==="
+input int      InpAsianStart       = 0;            // Asian Session Start Hour
+input int      InpAsianEnd         = 7;            // Asian Session End Hour
+input int      InpLondonStart      = 7;            // London Session Start Hour
+input int      InpLondonEnd        = 15;           // London Session End Hour (overlap uses London thresholds)
+input int      InpNYStart          = 15;           // New York Session Start Hour (after London overlap)
+input int      InpNYEnd            = 22;           // New York Session End Hour
 
 input group "=== INDICATOR: RSI ==="
 input int      InpRSIPeriod        = 14;           // RSI Period
@@ -351,10 +364,44 @@ int CheckEntrySignal()
    if(CopyBuffer(g_stochHandle, 0, 0, 3, stK) < 3) return 0;
    if(CopyBuffer(g_stochHandle, 1, 0, 3, stD) < 3) return 0;
 
-   //--- GATE 1: ADX must show trend (mandatory)
-   if(adxMain[1] < InpADXMinLevel) return 0;
+   //--- Determine current session and ADX thresholds
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   int hour = dt.hour;
 
-   //--- GATE 2: DI direction (mandatory)
+   double adxMin   = InpADXLondon;     // default
+   double adxStrong = InpADXStrongLondon;
+   string sessionName = "London";
+
+   if(hour >= InpNYStart && hour < InpNYEnd)
+   {
+      adxMin   = InpADXNewYork;
+      adxStrong = InpADXStrongNY;
+      sessionName = "NY";
+   }
+   else if(hour >= InpLondonStart && hour < InpLondonEnd)
+   {
+      adxMin   = InpADXLondon;
+      adxStrong = InpADXStrongLondon;
+      sessionName = "London";
+   }
+   else if(hour >= InpAsianStart && hour < InpAsianEnd)
+   {
+      adxMin   = InpADXAsian;
+      adxStrong = InpADXStrongAsian;
+      sessionName = "Asian";
+   }
+
+   //--- GATE 1: ADX below 20 = NO TRADE (absolute floor)
+   if(adxMain[1] < 20.0) return 0;
+
+   //--- GATE 2: ADX must meet session-specific minimum
+   if(adxMain[1] < adxMin) return 0;
+
+   //--- GATE 3: ADX must be RISING (momentum building, not fading)
+   if(InpADXMustRise && adxMain[1] <= adxMain[2]) return 0;
+
+   //--- GATE 4: DI direction (mandatory)
    double diSpread = diPlus[1] - diMinus[1];
    bool bullishDI  = (diSpread >= InpMinDISeparation);
    bool bearishDI  = (-diSpread >= InpMinDISeparation);
@@ -390,9 +437,9 @@ int CheckEntrySignal()
    //--- Need minimum 2 confirmations beyond ADX+DI
    if(confirms < 2) return 0;
 
-   //--- Determine signal strength
+   //--- Determine signal strength (session-adaptive)
    bool strong = (confirms >= 3)
-              && (adxMain[1] >= InpADXStrongLevel)
+              && (adxMain[1] >= adxStrong)
               && (MathAbs(diSpread) >= InpStrongDISep);
 
    if(bullishDI) return strong ? 2 : 1;
