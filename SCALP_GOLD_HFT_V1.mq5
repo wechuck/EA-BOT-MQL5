@@ -58,9 +58,27 @@ input int      InpHTF_MA_Slow      = 50;           // Slow MA Period (on HTF)
 input ENUM_MA_METHOD InpHTF_MA_Method = MODE_EMA;  // MA Method
 
 input group "=== MARKET STRUCTURE ==="
-input bool     InpUseStructure     = true;         // Enable Market Structure Filter
+input bool     InpUseStructure     = true;         // Enable Market Structure Filter (HH/HL/LH/LL)
 input int      InpStructureBars    = 20;           // Lookback Bars for Swing Detection
 input int      InpSwingStrength    = 3;            // Bars on Each Side to Confirm Swing Point
+
+input group "=== V3: BREAK OF STRUCTURE (BOS) ==="
+input bool     InpUseBOS           = true;         // Require Break of Structure for Entry
+input bool     InpBOSConfirmOnly   = false;        // BOS as Confirmation (false=hard gate)
+
+input group "=== V3: VOLUME CONFIRMATION ==="
+input bool     InpUseVolume        = true;         // Require Above-Average Tick Volume
+input int      InpVolAvgPeriod     = 20;           // Volume Average Lookback (bars)
+input double   InpVolMult          = 1.2;          // Current Vol Must Exceed Avg × This
+
+input group "=== V3: BREAK-EVEN STAGE ==="
+input bool     InpUseBreakEven     = true;         // Move SL to Break-Even Early
+input double   InpBreakEvenAt      = 50.0;         // Profit (pips) to Trigger Break-Even
+input double   InpBreakEvenLock    = 5.0;          // SL = Entry + This (pips, covers spread)
+
+input group "=== V3: TRADE TIMEOUT ==="
+input bool     InpUseTimeout       = true;         // Close Stale Trades After X Bars
+input int      InpMaxBarsInTrade   = 60;           // Max Bars a Trade May Stay Open
 
 input group "=== INDICATOR: ADX (session-adaptive) ==="
 input int      InpADXPeriod        = 14;           // ADX Period
@@ -552,6 +570,89 @@ int GetMarketStructure()
 }
 
 //+------------------------------------------------------------------+
+//| FIND NEAREST CONFIRMED SWING HIGH & LOW                          |
+//|  Outputs most recent swing high/low values. Returns false if     |
+//|  not enough swings found.                                         |
+//+------------------------------------------------------------------+
+bool FindNearestSwings(double &swingHigh, double &swingLow)
+{
+   int bars = InpStructureBars;
+   int str  = InpSwingStrength;
+
+   double highs[], lows[];
+   ArrayResize(highs, bars);
+   ArrayResize(lows, bars);
+   for(int i = 0; i < bars; i++)
+   {
+      highs[i] = iHigh(_Symbol, PERIOD_CURRENT, i + 1);
+      lows[i]  = iLow(_Symbol, PERIOD_CURRENT, i + 1);
+   }
+
+   bool gotHigh = false, gotLow = false;
+   swingHigh = 0; swingLow = 0;
+
+   for(int i = str; i < bars - str && !gotHigh; i++)
+   {
+      bool isSwingHigh = true;
+      for(int j = 1; j <= str; j++)
+         if(highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) { isSwingHigh = false; break; }
+      if(isSwingHigh) { swingHigh = highs[i]; gotHigh = true; }
+   }
+
+   for(int i = str; i < bars - str && !gotLow; i++)
+   {
+      bool isSwingLow = true;
+      for(int j = 1; j <= str; j++)
+         if(lows[i] >= lows[i - j] || lows[i] >= lows[i + j]) { isSwingLow = false; break; }
+      if(isSwingLow) { swingLow = lows[i]; gotLow = true; }
+   }
+
+   return (gotHigh && gotLow);
+}
+
+//+------------------------------------------------------------------+
+//| BREAK OF STRUCTURE (BOS)                                          |
+//|  Bull BOS: last closed bar closes ABOVE most recent swing high.  |
+//|  Bear BOS: last closed bar closes BELOW most recent swing low.   |
+//|  Returns: 1=bull BOS, -1=bear BOS, 0=none                         |
+//+------------------------------------------------------------------+
+int GetBOS()
+{
+   double swingHigh, swingLow;
+   if(!FindNearestSwings(swingHigh, swingLow)) return 0;
+
+   double close1 = iClose(_Symbol, PERIOD_CURRENT, 1);
+
+   if(close1 > swingHigh) return 1;
+   if(close1 < swingLow)  return -1;
+
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| VOLUME CONFIRMATION — current tick volume above rolling avg       |
+//+------------------------------------------------------------------+
+bool VolumeConfirmed()
+{
+   if(!InpUseVolume) return true;
+
+   long vols[];
+   ArraySetAsSeries(vols, true);
+   int need = InpVolAvgPeriod + 2;
+   if(CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, need, vols) < need)
+      return true;   // not enough data — don't block
+
+   //--- Average of bars [2 .. period+1], compare current closed bar [1]
+   double sum = 0;
+   for(int i = 2; i <= InpVolAvgPeriod + 1; i++)
+      sum += (double)vols[i];
+   double avg = sum / InpVolAvgPeriod;
+   if(avg <= 0) return true;
+
+   return ((double)vols[1] >= avg * InpVolMult);
+}
+
+//+------------------------------------------------------------------+
 //| NEWS FILTER — check MQL5 economic calendar                       |
 //+------------------------------------------------------------------+
 bool IsNearHighImpactNews()
@@ -704,8 +805,23 @@ int CheckEntrySignal()
       if(structure != 0 && structure != direction) return 0;
    }
 
-   //--- Score confirmations (need 2 of 3)
+   //--- GATE 7: Break of Structure (BOS) — hard gate unless confirm-only mode
+   int bos = 0;
+   if(InpUseBOS)
+   {
+      bos = GetBOS();
+      if(!InpBOSConfirmOnly && bos != direction) return 0;
+   }
+
+   //--- GATE 8: Volume confirmation (above-average participation)
+   if(!VolumeConfirmed()) return 0;
+
+   //--- Score confirmations (need 2 of 3, +1 if BOS confirm-only)
    int confirms = 0;
+
+   //--- BOS as a confirmation when in confirm-only mode
+   if(InpUseBOS && InpBOSConfirmOnly && bos == direction)
+      confirms++;
 
    //--- RSI confirmation
    if(bullishDI && rsi[1] > InpRSIBuyMin && rsi[1] < InpRSIBuyMax)
@@ -923,6 +1039,23 @@ void ManageOpenPositions()
       double currentSL  = PositionGetDouble(POSITION_SL);
       double currentTP  = PositionGetDouble(POSITION_TP);
       long   posType    = PositionGetInteger(POSITION_TYPE);
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+
+      //--- TRADE TIMEOUT: close stale trades that never resolved
+      if(InpUseTimeout && InpMaxBarsInTrade > 0)
+      {
+         int secsPerBar = PeriodSeconds(PERIOD_CURRENT);
+         if(secsPerBar > 0)
+         {
+            int barsOpen = (int)((TimeCurrent() - openTime) / secsPerBar);
+            if(barsOpen >= InpMaxBarsInTrade)
+            {
+               g_trade.PositionClose(ticket);
+               Print("TIMEOUT: ticket ", ticket, " closed after ", barsOpen, " bars");
+               continue;
+            }
+         }
+      }
 
       double currentPrice = (posType == POSITION_TYPE_BUY)
                             ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
@@ -948,6 +1081,32 @@ void ManageOpenPositions()
          profitPips = (currentPrice - openPrice) / g_pipSize;
       else
          profitPips = (openPrice - currentPrice) / g_pipSize;
+
+      //--- BREAK-EVEN STAGE: remove risk early (before full profit lock)
+      if(InpUseBreakEven && profitPips >= InpBreakEvenAt && profitPips < InpProfitLockAt)
+      {
+         double beSL;
+         if(posType == POSITION_TYPE_BUY)
+         {
+            beSL = NormalizeDouble(openPrice + InpBreakEvenLock * g_pipSize, _Digits);
+            if(currentSL < beSL)
+            {
+               g_trade.PositionModify(ticket, beSL, currentTP);
+               Print("BREAK-EVEN: ticket ", ticket, " SL -> entry +",
+                     DoubleToString(InpBreakEvenLock, 0), " pips");
+            }
+         }
+         else
+         {
+            beSL = NormalizeDouble(openPrice - InpBreakEvenLock * g_pipSize, _Digits);
+            if(currentSL == 0 || currentSL > beSL)
+            {
+               g_trade.PositionModify(ticket, beSL, currentTP);
+               Print("BREAK-EVEN: ticket ", ticket, " SL -> entry +",
+                     DoubleToString(InpBreakEvenLock, 0), " pips");
+            }
+         }
+      }
 
       //--- PROFIT LOCK
       if(profitPips >= InpProfitLockAt)
@@ -1135,7 +1294,7 @@ double GetLevelProgress()
 void CreateDashboard()
 {
    int panelW = 300;
-   int panelH = 300;
+   int panelH = 340;
    int panelX = 15;
    int panelY = 30;
 
@@ -1156,7 +1315,7 @@ void CreateDashboard()
    int y = panelY + 8;
    int lineH = 18;
 
-   DashLabel("Title",     x, y, "SCALP GOLD HFT V2", InpColorHeader, 10, true);   y += lineH + 4;
+   DashLabel("Title",     x, y, "SCALP GOLD HFT V3", InpColorHeader, 10, true);   y += lineH + 4;
    DashLabel("Handle",    x, y, "Handle: n30dyn4m1c", InpColorInfo, 8, false);     y += lineH;
    DashLabel("Sep1",      x, y, "────────────────────────────", clrDimGray, 7, false); y += lineH - 4;
    DashLabel("Balance",   x, y, "Balance: ---", InpColorInfo, 9, false);            y += lineH;
@@ -1169,6 +1328,8 @@ void CreateDashboard()
    DashLabel("ATR",       x, y, "ATR: ---", InpColorInfo, 9, false);                y += lineH;
    DashLabel("HTF",       x, y, "HTF: ---", InpColorInfo, 9, false);                y += lineH;
    DashLabel("Structure", x, y, "Structure: ---", InpColorInfo, 9, false);           y += lineH;
+   DashLabel("BOS",       x, y, "BOS: ---", InpColorInfo, 9, false);                 y += lineH;
+   DashLabel("Volume",    x, y, "Volume: ---", InpColorInfo, 9, false);              y += lineH;
    DashLabel("Status",    x, y, "Status: ---", InpColorInfo, 9, true);               y += lineH;
 
    ChartRedraw();
@@ -1231,6 +1392,26 @@ void UpdateDashboard()
    }
    else
       DashUpdate("Structure", "Structure: OFF", clrDimGray);
+
+   //--- BOS (Break of Structure)
+   if(InpUseBOS)
+   {
+      int bos = GetBOS();
+      string bosText = "BOS: " + ((bos == 1) ? "BULL break" : (bos == -1) ? "BEAR break" : "none");
+      DashUpdate("BOS", bosText, (bos == 1) ? InpColorProfit : (bos == -1) ? InpColorLoss : InpColorInfo);
+   }
+   else
+      DashUpdate("BOS", "BOS: OFF", clrDimGray);
+
+   //--- Volume confirmation
+   if(InpUseVolume)
+   {
+      bool volOK = VolumeConfirmed();
+      DashUpdate("Volume", "Volume: " + (volOK ? "above avg" : "below avg"),
+                 volOK ? InpColorProfit : InpColorLoss);
+   }
+   else
+      DashUpdate("Volume", "Volume: OFF", clrDimGray);
 
    //--- Status
    string status;
