@@ -30,20 +30,19 @@ input group "=== RISK MANAGEMENT ==="
 input double   InpRiskPercent      = 23.0;         // Risk Per Trade (% of balance)
 input double   InpMinSLPips        = 150.0;        // Minimum Stop Loss Floor (pips)
 input double   InpMaxLossPerTrade  = 0.0;          // Max $ Loss Per Trade (0=use % only)
-input bool     InpAddSpreadToSL    = true;         // Add Current Spread to SL Distance
-input bool     InpSubtractSpreadTP = true;         // Subtract Spread from TP (net TP)
+input bool     InpAddSpreadToSL    = true;         // Add Current Spread to SL Distance (only SL)
 input double   InpMinRR            = 1.2;          // Min Reward:Risk Ratio (skip if below)
 
 input group "=== ATR-BASED DYNAMIC SL/TP ==="
 input bool     InpUseATR           = true;         // Use ATR for Dynamic SL/TP
 input int      InpATRPeriod        = 14;           // ATR Period
 input double   InpATRSLMult        = 2.0;          // ATR × Multiplier = SL Distance
-input double   InpATRTPMult        = 2.5;          // ATR × Multiplier = TP Distance
+input double   InpATRTPMult        = 3.0;          // ATR × Multiplier = TP Distance (must be > SL mult)
 input double   InpMaxSLPips        = 500.0;        // Maximum SL Cap (pips)
 input double   InpMaxTPPips        = 600.0;        // Maximum TP Cap (pips)
 
 input group "=== TAKE PROFIT & PROFIT LOCK ==="
-input double   InpTPPips           = 200.0;        // Take Profit — Fixed Mode (pips)
+input double   InpTPPips           = 250.0;        // Take Profit — Fixed Mode (pips, > SL+spread)
 input double   InpProfitLockAt     = 100.0;        // Lock Profit When Trade Reaches (pips)
 input double   InpProfitLockSL     = 50.0;         // Move SL to Entry + This (pips) on Lock
 input bool     InpUseTrailing      = true;         // Enable Trailing Stop After Lock
@@ -808,10 +807,9 @@ bool OpenTrade(int signal)
    if(InpAddSpreadToSL)
       slPips += spreadPips;
 
-   //--- Subtract spread from TP (net TP)
+   //--- TP: spread is NOT applied to TP — only SL carries the spread buffer.
+   //--- ATR TP mult (3.0) > SL mult (2.0) guarantees TP distance > SL distance.
    double tpPips = tpPipsBase;
-   if(InpSubtractSpreadTP)
-      tpPips -= spreadPips;
    if(tpPips < 50.0) tpPips = 50.0;
 
    //--- EXPECTANCY GUARD: check minimum R:R ratio
