@@ -5,15 +5,15 @@
 //+------------------------------------------------------------------+
 //  Handle: n30dyn4m1c
 //  Broker: XM Global Ultra Low Standard
-//  Strategy: ADX + RSI + Stochastic + Price Action confluence
-//  Risk: ~23% per trade, SL min 150 pips + spread, profit lock at +200
+//  Strategy: ADX + RSI + Stochastic + Price Action + HTF + Structure
+//  Risk: ~23% per trade, ATR-based dynamic SL/TP, profit lock
 //  Goal: $20 start, 30% compounding per level, 30 levels
 //+------------------------------------------------------------------+
 #property copyright "n30dyn4m1c"
-#property version   "1.00"
-#property description "Gold HFT Scalping EA with capital protection"
-#property description "ADX + RSI + Stochastic + Price Action confluence"
-#property description "Level progression: $20 start, 30% per level"
+#property version   "2.00"
+#property description "Gold HFT Scalping EA v2 — multi-layer entry quality"
+#property description "HTF trend + Market Structure + ATR dynamic SL/TP"
+#property description "News filter + Spread adaptation + Expectancy guard"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -28,23 +28,46 @@ input string   InpTradeComment     = "n30dyn4m1c"; // Trade Comment / Handle
 
 input group "=== RISK MANAGEMENT ==="
 input double   InpRiskPercent      = 23.0;         // Risk Per Trade (% of balance)
-input double   InpMinSLPips        = 150.0;        // Minimum Stop Loss (pips)
+input double   InpMinSLPips        = 150.0;        // Minimum Stop Loss Floor (pips)
 input double   InpMaxLossPerTrade  = 0.0;          // Max $ Loss Per Trade (0=use % only)
 input bool     InpAddSpreadToSL    = true;         // Add Current Spread to SL Distance
+input bool     InpSubtractSpreadTP = true;         // Subtract Spread from TP (net TP)
+input double   InpMinRR            = 1.2;          // Min Reward:Risk Ratio (skip if below)
+
+input group "=== ATR-BASED DYNAMIC SL/TP ==="
+input bool     InpUseATR           = true;         // Use ATR for Dynamic SL/TP
+input int      InpATRPeriod        = 14;           // ATR Period
+input double   InpATRSLMult        = 2.0;          // ATR × Multiplier = SL Distance
+input double   InpATRTPMult        = 2.5;          // ATR × Multiplier = TP Distance
+input double   InpMaxSLPips        = 500.0;        // Maximum SL Cap (pips)
+input double   InpMaxTPPips        = 600.0;        // Maximum TP Cap (pips)
 
 input group "=== TAKE PROFIT & PROFIT LOCK ==="
-input double   InpTPPips           = 200.0;        // Take Profit (pips)
-input double   InpProfitLockAt     = 200.0;        // Lock Profit When Trade Reaches (pips)
+input double   InpTPPips           = 200.0;        // Take Profit — Fixed Mode (pips)
+input double   InpProfitLockAt     = 100.0;        // Lock Profit When Trade Reaches (pips)
 input double   InpProfitLockSL     = 50.0;         // Move SL to Entry + This (pips) on Lock
 input bool     InpUseTrailing      = true;         // Enable Trailing Stop After Lock
 input double   InpTrailDistPips    = 100.0;        // Trailing Distance Behind Price (pips)
 input double   InpTrailStepPips    = 20.0;         // Trailing Step — Min Advance to Move SL (pips)
 
+input group "=== HTF TREND FILTER ==="
+input bool     InpUseHTF           = true;         // Enable Higher Timeframe Trend Filter
+input ENUM_TIMEFRAMES InpHTF1      = PERIOD_M15;   // HTF 1 (fast trend)
+input ENUM_TIMEFRAMES InpHTF2      = PERIOD_H1;    // HTF 2 (macro trend)
+input int      InpHTF_MA_Fast      = 20;           // Fast MA Period (on HTF)
+input int      InpHTF_MA_Slow      = 50;           // Slow MA Period (on HTF)
+input ENUM_MA_METHOD InpHTF_MA_Method = MODE_EMA;  // MA Method
+
+input group "=== MARKET STRUCTURE ==="
+input bool     InpUseStructure     = true;         // Enable Market Structure Filter
+input int      InpStructureBars    = 20;           // Lookback Bars for Swing Detection
+input int      InpSwingStrength    = 3;            // Bars on Each Side to Confirm Swing Point
+
 input group "=== INDICATOR: ADX (session-adaptive) ==="
 input int      InpADXPeriod        = 14;           // ADX Period
-input double   InpADXAsian         = 22.0;         // Min ADX — Asian Session (gold is slow, spreads wider)
-input double   InpADXLondon        = 25.0;         // Min ADX — London Session (stronger setups)
-input double   InpADXNewYork       = 28.0;         // Min ADX — New York Session (strong momentum)
+input double   InpADXAsian         = 22.0;         // Min ADX — Asian Session
+input double   InpADXLondon        = 25.0;         // Min ADX — London Session
+input double   InpADXNewYork       = 28.0;         // Min ADX — New York Session
 input double   InpADXStrongAsian   = 28.0;         // Strong Trend ADX — Asian
 input double   InpADXStrongLondon  = 30.0;         // Strong Trend ADX — London
 input double   InpADXStrongNY      = 35.0;         // Strong Trend ADX — New York
@@ -56,32 +79,40 @@ input group "=== SESSION HOURS (broker server time) ==="
 input int      InpAsianStart       = 0;            // Asian Session Start Hour
 input int      InpAsianEnd         = 7;            // Asian Session End Hour
 input int      InpLondonStart      = 7;            // London Session Start Hour
-input int      InpLondonEnd        = 15;           // London Session End Hour (overlap uses London thresholds)
-input int      InpNYStart          = 15;           // New York Session Start Hour (after London overlap)
+input int      InpLondonEnd        = 15;           // London Session End Hour
+input int      InpNYStart          = 15;           // New York Session Start Hour
 input int      InpNYEnd            = 22;           // New York Session End Hour
 
 input group "=== INDICATOR: RSI ==="
 input int      InpRSIPeriod        = 14;           // RSI Period
-input double   InpRSIBuyMin        = 35.0;         // RSI Min for BUY (avoid oversold trap)
-input double   InpRSIBuyMax        = 65.0;         // RSI Max for BUY (don't buy exhausted moves)
-input double   InpRSISellMin       = 35.0;         // RSI Min for SELL (don't sell collapsed moves)
-input double   InpRSISellMax       = 65.0;         // RSI Max for SELL (avoid overbought trap)
+input double   InpRSIBuyMin        = 35.0;         // RSI Min for BUY
+input double   InpRSIBuyMax        = 65.0;         // RSI Max for BUY
+input double   InpRSISellMin       = 35.0;         // RSI Min for SELL
+input double   InpRSISellMax       = 65.0;         // RSI Max for SELL
 
 input group "=== INDICATOR: STOCHASTIC ==="
 input int      InpStochK           = 14;           // Stochastic %K Period
 input int      InpStochD           = 3;            // Stochastic %D Smoothing
 input int      InpStochSlowing     = 3;            // Stochastic Slowing
-input double   InpStochOBLevel     = 75.0;         // Overbought Level (don't BUY above this)
-input double   InpStochOSLevel     = 25.0;         // Oversold Level (don't SELL below this)
+input double   InpStochOBLevel     = 75.0;         // Overbought Level (don't BUY above)
+input double   InpStochOSLevel     = 25.0;         // Oversold Level (don't SELL below)
 
 input group "=== POSITION RULES ==="
 input int      InpMaxPositions     = 1;            // Max Positions (standard)
 input int      InpMaxPosStrong     = 2;            // Max Positions (strong trend)
 input double   InpMaxMarginPct     = 80.0;         // Max Free Margin Usage (%)
-input int      InpLossCooldownBars = 3;            // Bars to Skip After a SL Hit (anti-whipsaw)
+input int      InpLossCooldownBars = 3;            // Bars to Skip After a SL Hit
 
 input group "=== SPREAD FILTER ==="
-input double   InpMaxSpreadPips    = 35.0;         // Max Allowed Spread (pips) — always active
+input double   InpMaxSpreadPips    = 35.0;         // Max Allowed Spread (pips)
+input bool     InpSpreadWidening   = true;         // Reject if Spread Widening vs Avg
+input double   InpSpreadAvgMult    = 1.5;          // Reject if Current > Avg × This
+
+input group "=== NEWS FILTER ==="
+input bool     InpUseNewsFilter    = true;         // Enable News Filter (MQL5 Calendar)
+input int      InpNewsMinutesBefore= 30;           // Minutes Before High-Impact Event
+input int      InpNewsMinutesAfter = 30;           // Minutes After High-Impact Event
+input string   InpNewsCurrencies   = "USD,XAU";    // Currencies to Filter (comma-sep)
 
 input group "=== DAILY PROTECTION ==="
 input double   InpMaxDailyLossPct  = 30.0;         // Max Daily Loss (% of day-start balance)
@@ -92,11 +123,6 @@ input group "=== LEVEL PROGRESSION ==="
 input double   InpStartBalance     = 20.0;         // Level 1 Starting Balance ($)
 input double   InpLevelGrowthPct   = 30.0;         // Growth Per Level (%)
 input int      InpTotalLevels      = 30;           // Total Levels
-
-input group "=== SESSION FILTER (optional) ==="
-input bool     InpUseSessionFilter = false;         // Enable Session Filter (OFF = trade all hours)
-input int      InpSessionStart     = 2;            // Session Start Hour (server time)
-input int      InpSessionEnd       = 22;           // Session End Hour (server time)
 
 input group "=== DASHBOARD ==="
 input bool     InpShowDashboard    = true;          // Show On-Chart Dashboard
@@ -115,10 +141,13 @@ CTrade         g_trade;
 int            g_adxHandle;
 int            g_rsiHandle;
 int            g_stochHandle;
+int            g_atrHandle;
+int            g_htf1_maFast, g_htf1_maSlow;
+int            g_htf2_maFast, g_htf2_maSlow;
 
 // Pip calculation
 double         g_pipSize;
-double         g_pipValue;    // per standard lot
+double         g_pipValue;
 
 // Daily tracking
 double         g_dayStartBalance;
@@ -133,12 +162,17 @@ datetime       g_lastBarTime;
 double         g_levelTargets[];
 int            g_currentLevel;
 
-// Loss cooldown tracking
-int            g_barsSinceLoss;    // bars elapsed since last SL hit
-int            g_lastPosCount;     // position count on previous tick
-double         g_lastBalance;      // balance on previous tick
+// Loss cooldown — deal history based
+int            g_barsSinceLoss;
+ulong          g_lastDealTicket;
 
-// Dashboard object prefix
+// Spread averaging
+double         g_spreadHistory[];
+int            g_spreadIdx;
+int            g_spreadCount;
+#define        SPREAD_HISTORY_SIZE 60
+
+// Dashboard
 string         g_dashPrefix = "SHFT_";
 
 //+------------------------------------------------------------------+
@@ -168,7 +202,7 @@ int OnInit()
    else
       g_trade.SetTypeFilling(ORDER_FILLING_RETURN);
 
-   //--- Pip size: Gold 2-digit = 0.01, Gold 3-digit = 0.001 (1 pip = 0.01 always)
+   //--- Pip size
    if(_Digits == 3 || _Digits == 5)
       g_pipSize = _Point * 10.0;
    else
@@ -186,11 +220,29 @@ int OnInit()
    g_adxHandle   = iADX(_Symbol, PERIOD_CURRENT, InpADXPeriod);
    g_rsiHandle   = iRSI(_Symbol, PERIOD_CURRENT, InpRSIPeriod, PRICE_CLOSE);
    g_stochHandle = iStochastic(_Symbol, PERIOD_CURRENT, InpStochK, InpStochD, InpStochSlowing, MODE_SMA, STO_LOWHIGH);
+   g_atrHandle   = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
 
-   if(g_adxHandle == INVALID_HANDLE || g_rsiHandle == INVALID_HANDLE || g_stochHandle == INVALID_HANDLE)
+   if(g_adxHandle == INVALID_HANDLE || g_rsiHandle == INVALID_HANDLE ||
+      g_stochHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE)
    {
       Print("ERROR: Failed to create indicator handles!");
       return(INIT_FAILED);
+   }
+
+   //--- HTF MA handles
+   if(InpUseHTF)
+   {
+      g_htf1_maFast = iMA(_Symbol, InpHTF1, InpHTF_MA_Fast, 0, InpHTF_MA_Method, PRICE_CLOSE);
+      g_htf1_maSlow = iMA(_Symbol, InpHTF1, InpHTF_MA_Slow, 0, InpHTF_MA_Method, PRICE_CLOSE);
+      g_htf2_maFast = iMA(_Symbol, InpHTF2, InpHTF_MA_Fast, 0, InpHTF_MA_Method, PRICE_CLOSE);
+      g_htf2_maSlow = iMA(_Symbol, InpHTF2, InpHTF_MA_Slow, 0, InpHTF_MA_Method, PRICE_CLOSE);
+
+      if(g_htf1_maFast == INVALID_HANDLE || g_htf1_maSlow == INVALID_HANDLE ||
+         g_htf2_maFast == INVALID_HANDLE || g_htf2_maSlow == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create HTF MA handles!");
+         return(INIT_FAILED);
+      }
    }
 
    //--- Level progression table
@@ -205,22 +257,30 @@ int OnInit()
 
    //--- Loss cooldown
    g_barsSinceLoss = 999;
-   g_lastPosCount  = 0;
-   g_lastBalance   = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_lastDealTicket = 0;
+
+   //--- Spread history
+   ArrayResize(g_spreadHistory, SPREAD_HISTORY_SIZE);
+   ArrayFill(g_spreadHistory, 0, SPREAD_HISTORY_SIZE, 0.0);
+   g_spreadIdx   = 0;
+   g_spreadCount = 0;
 
    //--- Dashboard
    if(InpShowDashboard) CreateDashboard();
 
    //--- Log startup
    Print("======================================");
-   Print("  SCALP GOLD HFT V1 — INITIALIZED");
+   Print("  SCALP GOLD HFT V2 — INITIALIZED");
    Print("  Handle: ", InpTradeComment);
    Print("  Balance: $", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
    Print("  Level: ", g_currentLevel + 1, " / ", InpTotalLevels);
-   Print("  Next Target: $", DoubleToString(GetLevelTarget(), 2));
    Print("  Pip Size: ", DoubleToString(g_pipSize, _Digits));
    Print("  Pip Value/Lot: $", DoubleToString(g_pipValue, 4));
-   Print("  Risk: ", DoubleToString(InpRiskPercent, 1), "% | Min SL: ", DoubleToString(InpMinSLPips, 0), " pips");
+   Print("  Risk: ", DoubleToString(InpRiskPercent, 1), "%");
+   Print("  ATR SL/TP: ", InpUseATR ? "ON" : "OFF",
+         " | HTF: ", InpUseHTF ? "ON" : "OFF",
+         " | Structure: ", InpUseStructure ? "ON" : "OFF",
+         " | News: ", InpUseNewsFilter ? "ON" : "OFF");
    Print("  Timeframe: ", EnumToString(Period()));
    Print("======================================");
 
@@ -235,6 +295,15 @@ void OnDeinit(const int reason)
    if(g_adxHandle   != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
    if(g_rsiHandle   != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
    if(g_stochHandle != INVALID_HANDLE) IndicatorRelease(g_stochHandle);
+   if(g_atrHandle   != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+
+   if(InpUseHTF)
+   {
+      if(g_htf1_maFast != INVALID_HANDLE) IndicatorRelease(g_htf1_maFast);
+      if(g_htf1_maSlow != INVALID_HANDLE) IndicatorRelease(g_htf1_maSlow);
+      if(g_htf2_maFast != INVALID_HANDLE) IndicatorRelease(g_htf2_maFast);
+      if(g_htf2_maSlow != INVALID_HANDLE) IndicatorRelease(g_htf2_maSlow);
+   }
 
    ObjectsDeleteAll(0, g_dashPrefix);
    ChartRedraw();
@@ -254,16 +323,14 @@ void OnTick()
       g_barsSinceLoss++;
    }
 
-   //--- Detect SL hit: had positions last check, now fewer, and balance dropped
-   int curPosCount = CountMyPositions();
-   double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(curPosCount < g_lastPosCount && curBalance < g_lastBalance)
-   {
-      g_barsSinceLoss = 0;
-      Print("LOSS DETECTED: cooldown active for ", InpLossCooldownBars, " bars");
-   }
-   g_lastPosCount = curPosCount;
-   g_lastBalance  = curBalance;
+   //--- Detect SL hit via deal history (accurate, not balance-based)
+   DetectSLHitFromDeals();
+
+   //--- Update spread history
+   double curSpread = GetSpreadPips();
+   g_spreadHistory[g_spreadIdx] = curSpread;
+   g_spreadIdx = (g_spreadIdx + 1) % SPREAD_HISTORY_SIZE;
+   if(g_spreadCount < SPREAD_HISTORY_SIZE) g_spreadCount++;
 
    //--- New day reset
    datetime dayTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -289,8 +356,7 @@ void OnTick()
       if(g_dailyPL <= -maxLoss)
       {
          g_dailyHalted = true;
-         Print("!!! DAILY LOSS LIMIT HIT: $", DoubleToString(MathAbs(g_dailyPL), 2),
-               " | Halting new entries for today");
+         Print("!!! DAILY LOSS LIMIT HIT: $", DoubleToString(MathAbs(g_dailyPL), 2));
          if(InpCloseOnDailyLoss) CloseAllMyPositions("Daily loss limit");
       }
    }
@@ -301,18 +367,6 @@ void OnTick()
    //--- Entry logic: only on new bar + not halted
    if(isNewBar && !g_dailyHalted)
    {
-      //--- Session filter
-      if(InpUseSessionFilter)
-      {
-         MqlDateTime dt;
-         TimeCurrent(dt);
-         if(dt.hour < InpSessionStart || dt.hour >= InpSessionEnd)
-         {
-            if(InpShowDashboard) UpdateDashboard();
-            return;
-         }
-      }
-
       //--- Spread filter
       double spreadPips = GetSpreadPips();
       if(spreadPips > InpMaxSpreadPips)
@@ -321,8 +375,22 @@ void OnTick()
          return;
       }
 
+      //--- Spread widening check
+      if(InpSpreadWidening && IsSpreadWidening())
+      {
+         if(InpShowDashboard) UpdateDashboard();
+         return;
+      }
+
       //--- Loss cooldown check
       if(g_barsSinceLoss < InpLossCooldownBars)
+      {
+         if(InpShowDashboard) UpdateDashboard();
+         return;
+      }
+
+      //--- News filter
+      if(InpUseNewsFilter && IsNearHighImpactNews())
       {
          if(InpShowDashboard) UpdateDashboard();
          return;
@@ -339,13 +407,229 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| DETECT SL HIT FROM DEAL HISTORY (accurate cooldown)              |
+//+------------------------------------------------------------------+
+void DetectSLHitFromDeals()
+{
+   if(!HistorySelect(iTime(_Symbol, PERIOD_D1, 0), TimeCurrent()))
+      return;
+
+   int totalDeals = HistoryDealsTotal();
+   ulong newestSeen = g_lastDealTicket;
+
+   for(int i = totalDeals - 1; i >= 0; i--)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket <= 0) continue;
+      if(dealTicket <= g_lastDealTicket) break;   // already processed
+
+      if(dealTicket > newestSeen) newestSeen = dealTicket;
+
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+
+      long reason = HistoryDealGetInteger(dealTicket, DEAL_REASON);
+      if(reason == DEAL_REASON_SL)
+      {
+         g_barsSinceLoss = 0;
+         Print("SL HIT detected (deal #", dealTicket, ") — cooldown ", InpLossCooldownBars, " bars");
+      }
+   }
+
+   //--- Advance watermark to newest processed deal
+   g_lastDealTicket = newestSeen;
+}
+
+//+------------------------------------------------------------------+
+//| HTF TREND DIRECTION                                               |
+//|  Returns: 1=bullish, -1=bearish, 0=no clear trend                |
+//+------------------------------------------------------------------+
+int GetHTFTrend()
+{
+   if(!InpUseHTF) return 0;
+
+   double fast1[], slow1[], fast2[], slow2[];
+   ArraySetAsSeries(fast1, true);
+   ArraySetAsSeries(slow1, true);
+   ArraySetAsSeries(fast2, true);
+   ArraySetAsSeries(slow2, true);
+
+   if(CopyBuffer(g_htf1_maFast, 0, 0, 2, fast1) < 2) return 0;
+   if(CopyBuffer(g_htf1_maSlow, 0, 0, 2, slow1) < 2) return 0;
+   if(CopyBuffer(g_htf2_maFast, 0, 0, 2, fast2) < 2) return 0;
+   if(CopyBuffer(g_htf2_maSlow, 0, 0, 2, slow2) < 2) return 0;
+
+   bool htf1Bull = (fast1[0] > slow1[0]);
+   bool htf2Bull = (fast2[0] > slow2[0]);
+
+   if(htf1Bull && htf2Bull) return 1;
+   if(!htf1Bull && !htf2Bull) return -1;
+
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| MARKET STRUCTURE: detect HH/HL (bull) or LH/LL (bear)            |
+//|  Returns: 1=bullish structure, -1=bearish, 0=unclear              |
+//+------------------------------------------------------------------+
+int GetMarketStructure()
+{
+   if(!InpUseStructure) return 0;
+
+   int bars = InpStructureBars;
+   int str  = InpSwingStrength;
+
+   double highs[], lows[];
+   ArrayResize(highs, bars);
+   ArrayResize(lows, bars);
+
+   for(int i = 0; i < bars; i++)
+   {
+      highs[i] = iHigh(_Symbol, PERIOD_CURRENT, i + 1);
+      lows[i]  = iLow(_Symbol, PERIOD_CURRENT, i + 1);
+   }
+
+   //--- Find last 2 swing highs and 2 swing lows
+   double swingHighs[];
+   double swingLows[];
+   ArrayResize(swingHighs, 0);
+   ArrayResize(swingLows, 0);
+
+   for(int i = str; i < bars - str; i++)
+   {
+      //--- Swing high: bar[i] higher than str bars on both sides
+      bool isSwingHigh = true;
+      for(int j = 1; j <= str; j++)
+      {
+         if(highs[i] <= highs[i - j] || highs[i] <= highs[i + j])
+         {
+            isSwingHigh = false;
+            break;
+         }
+      }
+      if(isSwingHigh)
+      {
+         int sz = ArraySize(swingHighs);
+         ArrayResize(swingHighs, sz + 1);
+         swingHighs[sz] = highs[i];
+         if(ArraySize(swingHighs) >= 2) break;
+      }
+   }
+
+   for(int i = str; i < bars - str; i++)
+   {
+      bool isSwingLow = true;
+      for(int j = 1; j <= str; j++)
+      {
+         if(lows[i] >= lows[i - j] || lows[i] >= lows[i + j])
+         {
+            isSwingLow = false;
+            break;
+         }
+      }
+      if(isSwingLow)
+      {
+         int sz = ArraySize(swingLows);
+         ArrayResize(swingLows, sz + 1);
+         swingLows[sz] = lows[i];
+         if(ArraySize(swingLows) >= 2) break;
+      }
+   }
+
+   if(ArraySize(swingHighs) < 2 || ArraySize(swingLows) < 2)
+      return 0;
+
+   //--- [0] = most recent, [1] = older
+   bool higherHigh = (swingHighs[0] > swingHighs[1]);
+   bool higherLow  = (swingLows[0] > swingLows[1]);
+   bool lowerHigh  = (swingHighs[0] < swingHighs[1]);
+   bool lowerLow   = (swingLows[0] < swingLows[1]);
+
+   if(higherHigh && higherLow)  return 1;    // Bullish structure (HH + HL)
+   if(lowerHigh && lowerLow)    return -1;   // Bearish structure (LH + LL)
+
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| NEWS FILTER — check MQL5 economic calendar                       |
+//+------------------------------------------------------------------+
+bool IsNearHighImpactNews()
+{
+   datetime now = TimeCurrent();
+   datetime from = now - InpNewsMinutesBefore * 60;
+   datetime to   = now + InpNewsMinutesAfter * 60;
+
+   MqlCalendarValue values[];
+   int count = CalendarValueHistory(values, from, to);
+   if(count <= 0) return false;
+
+   for(int i = 0; i < count; i++)
+   {
+      MqlCalendarEvent event;
+      if(!CalendarEventById(values[i].event_id, event))
+         continue;
+
+      //--- Only high importance
+      if(event.importance != CALENDAR_IMPORTANCE_HIGH)
+         continue;
+
+      //--- Check if event currency matches our filter
+      MqlCalendarCountry country;
+      if(!CalendarCountryById(event.country_id, country))
+         continue;
+
+      string evCurrency = country.currency;
+      StringToUpper(evCurrency);
+
+      //--- Parse our filter currencies
+      string currencies = InpNewsCurrencies;
+      StringToUpper(currencies);
+
+      if(StringFind(currencies, evCurrency) >= 0)
+         return true;
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| SPREAD WIDENING CHECK                                             |
+//+------------------------------------------------------------------+
+bool IsSpreadWidening()
+{
+   if(g_spreadCount < 10) return false;
+
+   double sum = 0;
+   int cnt = MathMin(g_spreadCount, SPREAD_HISTORY_SIZE);
+   for(int i = 0; i < cnt; i++)
+      sum += g_spreadHistory[i];
+   double avg = sum / cnt;
+
+   double current = GetSpreadPips();
+   return (current > avg * InpSpreadAvgMult);
+}
+
+//+------------------------------------------------------------------+
+//| GET ATR VALUE IN PIPS                                             |
+//+------------------------------------------------------------------+
+double GetATRPips()
+{
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(g_atrHandle, 0, 0, 2, atr) < 2) return 0;
+   return atr[1] / g_pipSize;
+}
+
+//+------------------------------------------------------------------+
 //| SIGNAL DETECTION                                                  |
 //|  Returns: 0=none, +1=BUY standard, +2=BUY strong,               |
 //|           -1=SELL standard, -2=SELL strong                        |
 //+------------------------------------------------------------------+
 int CheckEntrySignal()
 {
-   //--- Read ADX buffers (bar 1 = last completed bar)
+   //--- Read ADX buffers
    double adxMain[], diPlus[], diMinus[];
    ArraySetAsSeries(adxMain, true);
    ArraySetAsSeries(diPlus, true);
@@ -371,43 +655,55 @@ int CheckEntrySignal()
    TimeCurrent(dt);
    int hour = dt.hour;
 
-   double adxMin   = InpADXLondon;     // default
+   double adxMin    = InpADXLondon;
    double adxStrong = InpADXStrongLondon;
-   string sessionName = "London";
 
    if(hour >= InpNYStart && hour < InpNYEnd)
    {
       adxMin   = InpADXNewYork;
       adxStrong = InpADXStrongNY;
-      sessionName = "NY";
    }
    else if(hour >= InpLondonStart && hour < InpLondonEnd)
    {
       adxMin   = InpADXLondon;
       adxStrong = InpADXStrongLondon;
-      sessionName = "London";
    }
    else if(hour >= InpAsianStart && hour < InpAsianEnd)
    {
       adxMin   = InpADXAsian;
       adxStrong = InpADXStrongAsian;
-      sessionName = "Asian";
    }
 
-   //--- GATE 1: ADX below 20 = NO TRADE (absolute floor)
+   //--- GATE 1: ADX absolute floor
    if(adxMain[1] < 20.0) return 0;
 
-   //--- GATE 2: ADX must meet session-specific minimum
+   //--- GATE 2: ADX session minimum
    if(adxMain[1] < adxMin) return 0;
 
-   //--- GATE 3: ADX must be RISING (momentum building, not fading)
+   //--- GATE 3: ADX must be RISING
    if(InpADXMustRise && adxMain[1] <= adxMain[2]) return 0;
 
-   //--- GATE 4: DI direction (mandatory)
+   //--- GATE 4: DI direction
    double diSpread = diPlus[1] - diMinus[1];
    bool bullishDI  = (diSpread >= InpMinDISeparation);
    bool bearishDI  = (-diSpread >= InpMinDISeparation);
    if(!bullishDI && !bearishDI) return 0;
+
+   int direction = bullishDI ? 1 : -1;
+
+   //--- GATE 5: HTF trend alignment
+   if(InpUseHTF)
+   {
+      int htfTrend = GetHTFTrend();
+      if(htfTrend != 0 && htfTrend != direction) return 0;
+   }
+
+   //--- GATE 6: Market structure alignment
+   if(InpUseStructure)
+   {
+      int structure = GetMarketStructure();
+      if(structure != 0 && structure != direction) return 0;
+   }
 
    //--- Score confirmations (need 2 of 3)
    int confirms = 0;
@@ -418,24 +714,19 @@ int CheckEntrySignal()
    if(bearishDI && rsi[1] > InpRSISellMin && rsi[1] < InpRSISellMax)
       confirms++;
 
-   //--- Stochastic confirmation (with zone filter + fresh cross)
-   //--- BUY: K > D, K not overbought, K crossed D within last 2 bars
-   //--- SELL: K < D, K not oversold, K crossed D within last 2 bars
-   bool stochFreshCross = false;
+   //--- Stochastic confirmation (zone + fresh cross)
    if(bullishDI)
    {
-      bool kAboveD     = (stK[1] > stD[1]);
-      bool notOB       = (stK[1] < InpStochOBLevel);
-      bool freshCross  = (stK[2] <= stD[2]);   // was below/equal on bar 2, now above
-      stochFreshCross  = freshCross;
+      bool kAboveD    = (stK[1] > stD[1]);
+      bool notOB      = (stK[1] < InpStochOBLevel);
+      bool freshCross = (stK[2] <= stD[2]);
       if(kAboveD && notOB && freshCross) confirms++;
    }
    if(bearishDI)
    {
-      bool kBelowD     = (stK[1] < stD[1]);
-      bool notOS       = (stK[1] > InpStochOSLevel);
-      bool freshCross  = (stK[2] >= stD[2]);   // was above/equal on bar 2, now below
-      stochFreshCross  = freshCross;
+      bool kBelowD    = (stK[1] < stD[1]);
+      bool notOS      = (stK[1] > InpStochOSLevel);
+      bool freshCross = (stK[2] >= stD[2]);
       if(kBelowD && notOS && freshCross) confirms++;
    }
 
@@ -449,14 +740,14 @@ int CheckEntrySignal()
 
    if(range > 0 && (body / range) >= 0.40)
    {
-      if(bullishDI && close1 > open1) confirms++;   // Bullish candle
-      if(bearishDI && close1 < open1) confirms++;   // Bearish candle
+      if(bullishDI && close1 > open1) confirms++;
+      if(bearishDI && close1 < open1) confirms++;
    }
 
-   //--- Need minimum 2 confirmations beyond ADX+DI
+   //--- Need minimum 2 confirmations
    if(confirms < 2) return 0;
 
-   //--- Determine signal strength (session-adaptive)
+   //--- Determine signal strength
    bool strong = (confirms >= 3)
               && (adxMain[1] >= adxStrong)
               && (MathAbs(diSpread) >= InpStrongDISep);
@@ -474,7 +765,7 @@ bool OpenTrade(int signal)
 {
    if(signal == 0) return false;
 
-   int direction = (signal > 0) ? 1 : -1;     // 1=BUY, -1=SELL
+   int direction = (signal > 0) ? 1 : -1;
    bool isStrong = (MathAbs(signal) == 2);
 
    //--- Position limits
@@ -486,9 +777,51 @@ bool OpenTrade(int signal)
    if(posCount > 0 && posDir != 0 && posDir != direction)  return false;
    if(posCount > 0 && posDir == direction && !isStrong)     return false;
 
-   //--- Spread check (double-check)
+   //--- Spread check
    double spreadPips = GetSpreadPips();
    if(spreadPips > InpMaxSpreadPips) return false;
+
+   //--- Calculate SL/TP distances
+   double slPipsBase, tpPipsBase;
+
+   if(InpUseATR)
+   {
+      double atrPips = GetATRPips();
+      if(atrPips <= 0) return false;
+
+      slPipsBase = atrPips * InpATRSLMult;
+      tpPipsBase = atrPips * InpATRTPMult;
+
+      //--- Apply floors and caps
+      if(slPipsBase < InpMinSLPips) slPipsBase = InpMinSLPips;
+      if(slPipsBase > InpMaxSLPips) slPipsBase = InpMaxSLPips;
+      if(tpPipsBase > InpMaxTPPips) tpPipsBase = InpMaxTPPips;
+   }
+   else
+   {
+      slPipsBase = InpMinSLPips;
+      tpPipsBase = InpTPPips;
+   }
+
+   //--- Add spread to SL
+   double slPips = slPipsBase;
+   if(InpAddSpreadToSL)
+      slPips += spreadPips;
+
+   //--- Subtract spread from TP (net TP)
+   double tpPips = tpPipsBase;
+   if(InpSubtractSpreadTP)
+      tpPips -= spreadPips;
+   if(tpPips < 50.0) tpPips = 50.0;
+
+   //--- EXPECTANCY GUARD: check minimum R:R ratio
+   double rr = tpPips / slPips;
+   if(rr < InpMinRR)
+   {
+      Print("R:R SKIP: ", DoubleToString(rr, 2), " < min ", DoubleToString(InpMinRR, 2),
+            " (SL:", DoubleToString(slPips, 1), " TP:", DoubleToString(tpPips, 1), ")");
+      return false;
+   }
 
    //--- Calculate risk
    double balance     = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -498,22 +831,11 @@ bool OpenTrade(int signal)
       riskDollars = InpMaxLossPerTrade;
 
    //--- Lot size from risk and SL
-   double baseSLPips = InpMinSLPips;
-   double lotSize    = riskDollars / (baseSLPips * g_pipValue);
+   double lotSize = riskDollars / (slPipsBase * g_pipValue);
    lotSize = NormalizeLots(lotSize);
    if(lotSize <= 0) return false;
 
-   //--- Recalculate actual SL after lot normalization (lot rounding changes effective SL)
-   double actualSLPips = riskDollars / (lotSize * g_pipValue);
-   if(actualSLPips < InpMinSLPips)
-      actualSLPips = InpMinSLPips;
-
-   //--- Add spread buffer
-   double slPips = actualSLPips;
-   if(InpAddSpreadToSL)
-      slPips += spreadPips;
-
-   //--- MARGIN CHECK (for ALL trades — critical at low balances)
+   //--- MARGIN CHECK
    {
       double marginReq = 0;
       double checkPrice = (direction == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
@@ -528,7 +850,6 @@ bool OpenTrade(int signal)
 
       if(marginReq > usableMargin)
       {
-         //--- Reduce lot to what margin allows
          double reducedLots = NormalizeLots(lotSize * usableMargin / marginReq);
          if(reducedLots <= 0)
          {
@@ -541,21 +862,8 @@ bool OpenTrade(int signal)
                   " but only $", DoubleToString(freeMargin, 2), " free");
             return false;
          }
-         Print("MARGIN ADJ: Lot reduced from ", DoubleToString(lotSize, 2),
-               " to ", DoubleToString(reducedLots, 2),
-               " (margin: $", DoubleToString(marginReq, 2),
-               " > free: $", DoubleToString(freeMargin, 2), ")");
          lotSize = reducedLots;
-
-         //--- KEEP ORIGINAL SL — do NOT widen it
-         //--- Accept lower dollar risk instead of destroying R:R ratio
-         //--- At 0.01 lots with 150 pip SL: risk = $1.50 (7.5% of $20)
-         //--- This preserves R:R at 200:150 = 1.33:1 reward-to-risk
-         actualSLPips = InpMinSLPips;
-         slPips = actualSLPips;
-         if(InpAddSpreadToSL)
-            slPips += spreadPips;
-         riskDollars = lotSize * actualSLPips * g_pipValue;
+         riskDollars = lotSize * slPipsBase * g_pipValue;
       }
    }
 
@@ -564,12 +872,7 @@ bool OpenTrade(int signal)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    double slDist = slPips * g_pipSize;
-
-   //--- Scale TP proportionally if SL differs from base (maintain R:R)
-   double effectiveTPPips = InpTPPips;
-   if(actualSLPips > InpMinSLPips)
-      effectiveTPPips = InpTPPips * (actualSLPips / InpMinSLPips);
-   double tpDist = effectiveTPPips * g_pipSize;
+   double tpDist = tpPips * g_pipSize;
 
    bool result = false;
 
@@ -579,12 +882,12 @@ bool OpenTrade(int signal)
       double tp = NormalizeDouble(ask + tpDist, _Digits);
       result = g_trade.Buy(lotSize, _Symbol, ask, sl, tp, InpTradeComment);
       if(result)
-         Print(">>> BUY opened: ", DoubleToString(lotSize, 2), " lots @ ",
-               DoubleToString(ask, _Digits), " | SL: ", DoubleToString(sl, _Digits),
-               " (", DoubleToString(slPips, 1), " pips) | TP: ", DoubleToString(tp, _Digits),
-               " | Risk: $", DoubleToString(riskDollars, 2),
-               " | R:R 1:", DoubleToString(effectiveTPPips / slPips, 2),
-               isStrong ? " [STRONG TREND]" : "");
+         Print(">>> BUY ", DoubleToString(lotSize, 2), " @ ", DoubleToString(ask, _Digits),
+               " | SL:", DoubleToString(sl, _Digits), "(", DoubleToString(slPips, 0), "p)",
+               " | TP:", DoubleToString(tp, _Digits), "(", DoubleToString(tpPips, 0), "p)",
+               " | Risk:$", DoubleToString(riskDollars, 2),
+               " | R:R 1:", DoubleToString(rr, 2),
+               isStrong ? " [STRONG]" : "");
    }
    else
    {
@@ -592,12 +895,12 @@ bool OpenTrade(int signal)
       double tp = NormalizeDouble(bid - tpDist, _Digits);
       result = g_trade.Sell(lotSize, _Symbol, bid, sl, tp, InpTradeComment);
       if(result)
-         Print(">>> SELL opened: ", DoubleToString(lotSize, 2), " lots @ ",
-               DoubleToString(bid, _Digits), " | SL: ", DoubleToString(sl, _Digits),
-               " (", DoubleToString(slPips, 1), " pips) | TP: ", DoubleToString(tp, _Digits),
-               " | Risk: $", DoubleToString(riskDollars, 2),
-               " | R:R 1:", DoubleToString(effectiveTPPips / slPips, 2),
-               isStrong ? " [STRONG TREND]" : "");
+         Print(">>> SELL ", DoubleToString(lotSize, 2), " @ ", DoubleToString(bid, _Digits),
+               " | SL:", DoubleToString(sl, _Digits), "(", DoubleToString(slPips, 0), "p)",
+               " | TP:", DoubleToString(tp, _Digits), "(", DoubleToString(tpPips, 0), "p)",
+               " | Risk:$", DoubleToString(riskDollars, 2),
+               " | R:R 1:", DoubleToString(rr, 2),
+               isStrong ? " [STRONG]" : "");
    }
 
    if(!result)
@@ -608,7 +911,6 @@ bool OpenTrade(int signal)
 
 //+------------------------------------------------------------------+
 //| MANAGE OPEN POSITIONS                                             |
-//|  — Enforce SL, profit lock, trailing stop                        |
 //+------------------------------------------------------------------+
 void ManageOpenPositions()
 {
@@ -638,7 +940,7 @@ void ManageOpenPositions()
          else
             newSL = NormalizeDouble(openPrice + slDist, _Digits);
          g_trade.PositionModify(ticket, newSL, currentTP);
-         Print("!!! SL ENFORCED on ticket ", ticket, " — SL was missing!");
+         Print("!!! SL ENFORCED on ticket ", ticket);
          continue;
       }
 
@@ -649,7 +951,7 @@ void ManageOpenPositions()
       else
          profitPips = (openPrice - currentPrice) / g_pipSize;
 
-      //--- PROFIT LOCK: at +200 pips, move SL to entry + 50 pips
+      //--- PROFIT LOCK
       if(profitPips >= InpProfitLockAt)
       {
          double lockSL;
@@ -659,10 +961,8 @@ void ManageOpenPositions()
             if(currentSL < lockSL)
             {
                g_trade.PositionModify(ticket, lockSL, currentTP);
-               Print("PROFIT LOCK: ticket ", ticket, " SL moved to +",
-                     DoubleToString(InpProfitLockSL, 0), " pips (locked ",
-                     DoubleToString(InpProfitLockSL * lotSizeFromTicket(ticket) * g_pipValue, 2),
-                     " profit)");
+               Print("PROFIT LOCK: ticket ", ticket, " SL -> entry +",
+                     DoubleToString(InpProfitLockSL, 0), " pips");
             }
          }
          else
@@ -671,7 +971,7 @@ void ManageOpenPositions()
             if(currentSL > lockSL)
             {
                g_trade.PositionModify(ticket, lockSL, currentTP);
-               Print("PROFIT LOCK: ticket ", ticket, " SL moved to +",
+               Print("PROFIT LOCK: ticket ", ticket, " SL -> entry +",
                      DoubleToString(InpProfitLockSL, 0), " pips");
             }
          }
@@ -725,7 +1025,7 @@ int CountMyPositions()
 }
 
 //+------------------------------------------------------------------+
-//| GET DIRECTION OF FIRST OPEN POSITION (1=BUY, -1=SELL, 0=none)   |
+//| GET DIRECTION OF FIRST OPEN POSITION                              |
 //+------------------------------------------------------------------+
 int GetMyPositionDirection()
 {
@@ -756,7 +1056,7 @@ void CloseAllMyPositions(string reason)
          PositionGetString(POSITION_SYMBOL) == _Symbol)
       {
          g_trade.PositionClose(ticket);
-         Print("Closed ticket ", ticket, " — Reason: ", reason);
+         Print("Closed ticket ", ticket, " — ", reason);
       }
    }
 }
@@ -796,7 +1096,6 @@ void CalculateLevelTable()
 
    UpdateCurrentLevel();
 
-   //--- Log level table
    Print("--- LEVEL TABLE ---");
    for(int i = 0; i <= InpTotalLevels; i++)
       Print("  Level ", i + 1, ": $", DoubleToString(g_levelTargets[i], 2));
@@ -837,12 +1136,11 @@ double GetLevelProgress()
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
-   int panelW = 280;
-   int panelH = 260;
+   int panelW = 300;
+   int panelH = 300;
    int panelX = 15;
    int panelY = 30;
 
-   //--- Background
    string bgName = g_dashPrefix + "BG";
    ObjectCreate(0, bgName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, bgName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
@@ -856,22 +1154,24 @@ void CreateDashboard()
    ObjectSetInteger(0, bgName, OBJPROP_WIDTH, 1);
    ObjectSetInteger(0, bgName, OBJPROP_BACK, false);
 
-   //--- Labels
    int x = panelX + 12;
    int y = panelY + 8;
-   int lineH = 20;
+   int lineH = 18;
 
-   DashLabel("Title",    x, y,            "SCALP GOLD HFT V1", InpColorHeader, 10, true);  y += lineH + 4;
-   DashLabel("Handle",   x, y,            "Handle: n30dyn4m1c", InpColorInfo, 8, false);    y += lineH;
-   DashLabel("Sep1",     x, y,            "──────────────────────────", clrDimGray, 7, false); y += lineH - 4;
-   DashLabel("Balance",  x, y,            "Balance: ---", InpColorInfo, 9, false);           y += lineH;
-   DashLabel("Level",    x, y,            "Level: ---", InpColorInfo, 9, false);             y += lineH;
-   DashLabel("Target",   x, y,            "Target: ---", InpColorInfo, 9, false);            y += lineH;
-   DashLabel("Progress", x, y,            "Progress: ---", InpColorInfo, 9, false);          y += lineH;
-   DashLabel("DailyPL",  x, y,            "Daily P&L: ---", InpColorInfo, 9, false);         y += lineH;
-   DashLabel("Positions",x, y,            "Positions: ---", InpColorInfo, 9, false);          y += lineH;
-   DashLabel("Spread",   x, y,            "Spread: ---", InpColorInfo, 9, false);             y += lineH;
-   DashLabel("Status",   x, y,            "Status: ---", InpColorInfo, 9, true);              y += lineH;
+   DashLabel("Title",     x, y, "SCALP GOLD HFT V2", InpColorHeader, 10, true);   y += lineH + 4;
+   DashLabel("Handle",    x, y, "Handle: n30dyn4m1c", InpColorInfo, 8, false);     y += lineH;
+   DashLabel("Sep1",      x, y, "────────────────────────────", clrDimGray, 7, false); y += lineH - 4;
+   DashLabel("Balance",   x, y, "Balance: ---", InpColorInfo, 9, false);            y += lineH;
+   DashLabel("Level",     x, y, "Level: ---", InpColorInfo, 9, false);              y += lineH;
+   DashLabel("Target",    x, y, "Target: ---", InpColorInfo, 9, false);             y += lineH;
+   DashLabel("Progress",  x, y, "Progress: ---", InpColorInfo, 9, false);           y += lineH;
+   DashLabel("DailyPL",   x, y, "Daily P&L: ---", InpColorInfo, 9, false);          y += lineH;
+   DashLabel("Positions", x, y, "Positions: ---", InpColorInfo, 9, false);           y += lineH;
+   DashLabel("Spread",    x, y, "Spread: ---", InpColorInfo, 9, false);              y += lineH;
+   DashLabel("ATR",       x, y, "ATR: ---", InpColorInfo, 9, false);                y += lineH;
+   DashLabel("HTF",       x, y, "HTF: ---", InpColorInfo, 9, false);                y += lineH;
+   DashLabel("Structure", x, y, "Structure: ---", InpColorInfo, 9, false);           y += lineH;
+   DashLabel("Status",    x, y, "Status: ---", InpColorInfo, 9, true);               y += lineH;
 
    ChartRedraw();
 }
@@ -883,36 +1183,56 @@ void UpdateDashboard()
    double spread   = GetSpreadPips();
    int    posCount = CountMyPositions();
 
-   //--- Balance
    DashUpdate("Balance", "Balance: $" + DoubleToString(balance, 2)
               + " (Eq: $" + DoubleToString(equity, 2) + ")",
               (equity >= balance) ? InpColorProfit : InpColorLoss);
 
-   //--- Level
    DashUpdate("Level", "Level: " + IntegerToString(g_currentLevel + 1) + " / " + IntegerToString(InpTotalLevels),
               InpColorInfo);
 
-   //--- Target
    DashUpdate("Target", "Target: $" + DoubleToString(GetLevelTarget(), 2), InpColorHeader);
 
-   //--- Progress
    double prog = GetLevelProgress();
    DashUpdate("Progress", "Progress: " + DoubleToString(prog, 1) + "%",
               (prog >= 50) ? InpColorProfit : InpColorInfo);
 
-   //--- Daily P&L
    DashUpdate("DailyPL", "Daily P&L: $" + DoubleToString(g_dailyPL, 2),
               (g_dailyPL >= 0) ? InpColorProfit : InpColorLoss);
 
-   //--- Positions
    DashUpdate("Positions", "Positions: " + IntegerToString(posCount)
-              + " / " + IntegerToString(g_dailyHalted ? 0 : (posCount > 0 ? InpMaxPosStrong : InpMaxPositions)),
+              + " / " + IntegerToString(g_dailyHalted ? 0 : InpMaxPositions),
               InpColorInfo);
 
-   //--- Spread
    string spreadStatus = (spread <= InpMaxSpreadPips) ? " OK" : " HIGH";
    DashUpdate("Spread", "Spread: " + DoubleToString(spread, 1) + " pips" + spreadStatus,
               (spread <= InpMaxSpreadPips) ? InpColorProfit : InpColorLoss);
+
+   //--- ATR
+   double atrPips = GetATRPips();
+   DashUpdate("ATR", "ATR: " + DoubleToString(atrPips, 1) + " pips"
+              + (InpUseATR ? " (dynamic SL/TP)" : " (fixed)"), InpColorInfo);
+
+   //--- HTF trend
+   string htfText = "HTF: ";
+   if(InpUseHTF)
+   {
+      int htf = GetHTFTrend();
+      htfText += (htf == 1) ? "BULLISH" : (htf == -1) ? "BEARISH" : "MIXED";
+      DashUpdate("HTF", htfText, (htf == 1) ? InpColorProfit : (htf == -1) ? InpColorLoss : InpColorInfo);
+   }
+   else
+      DashUpdate("HTF", "HTF: OFF", clrDimGray);
+
+   //--- Market structure
+   string strText = "Structure: ";
+   if(InpUseStructure)
+   {
+      int str = GetMarketStructure();
+      strText += (str == 1) ? "HH/HL (bull)" : (str == -1) ? "LH/LL (bear)" : "unclear";
+      DashUpdate("Structure", strText, (str == 1) ? InpColorProfit : (str == -1) ? InpColorLoss : InpColorInfo);
+   }
+   else
+      DashUpdate("Structure", "Structure: OFF", clrDimGray);
 
    //--- Status
    string status;
